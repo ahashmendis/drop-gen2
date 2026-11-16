@@ -1,0 +1,9 @@
+# Secrets / local config — never commit
+config.json
+*.key
+.env
+.DS_Store
+
+# Built artifacts
+Drop
+*.app

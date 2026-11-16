@@ -14,6 +14,39 @@ DIR="$HOME/Library/Application Support/Drop"
 APP="$HOME/Applications/Drop.app"
 mkdir -p "$DIR" "$HOME/Applications"
 
+# Local configuration (Phase 3): created once, never overwritten on update,
+# so an existing API key survives reinstalls. 0600 = owner read/write only.
+CONFIG="$DIR/config.json"
+if [ ! -f "$CONFIG" ]; then
+  cat > "$CONFIG" <<'CFGEOF'
+{
+  "provider": "ollama",
+  "ollama": {
+    "base_url": "http://127.0.0.1:11434",
+    "default_model": "",
+    "context": 0
+  },
+  "opencode_go": {
+    "base_url": "https://opencode.ai/zen/go/v1",
+    "api_key": "",
+    "model": "mimo-v2.6-flash"
+  },
+  "network": {
+    "connect_timeout": 20,
+    "stream_idle_timeout": 120,
+    "retry_attempts": 3,
+    "retry_backoff": true
+  },
+  "preferences": {
+    "remember_provider": true,
+    "allow_fallback": false
+  }
+}
+CFGEOF
+fi
+chmod 600 "$CONFIG" 2>/dev/null || true
+chmod 700 "$DIR" 2>/dev/null || true
+
 # Remove the older attempts
 rm -rf "$HOME/Applications/Java Answers.app"
 pkill -x Drop 2>/dev/null || true
@@ -23,7 +56,6 @@ import Cocoa
 import PDFKit
 import Carbon
 
-let DEFAULT_MODEL = "qwen3-coder"
 let SKIP_DIRS: Set<String> = [".idea", "target", ".git", "node_modules", "build", ".mvn", ".gradle", "out", ".vscode"]
 let TEXT_EXT: Set<String> = ["java", "xml", "md", "properties", "yml", "yaml", "json", "txt", "sql", "gradle", "kts", "html", "csv"]
 let PROMPT_HEADER = """
@@ -103,6 +135,461 @@ Output ONLY the files you change to fix the errors, each one COMPLETE and starti
 No task list, no explanations, no test commands, no unchanged files.
 """
 
+// ===== Configuration (Phase 3): local file, never Keychain =====
+let CONFIG_URL = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent("Library/Application Support/Drop/config.json")
+
+struct DropConfig {
+    var provider = "ollama"                 // "ollama" | "opencode_go"
+    var ollamaBase = "http://127.0.0.1:11434"
+    // Last selected Ollama model (the dropdown only ever offers models that
+    // are actually installed — never a hardcoded model name).
+    var ollamaDefaultModel = ""
+    // Manual Ollama context override: 0 = use the hardware-aware preset.
+    var ollamaContext = 0
+    var ocBase = "https://opencode.ai/zen/go/v1"
+    var ocKey = ""
+    var ocModel = "mimo-v2.6-flash"
+    var connectTimeout = 20.0
+    var streamIdleTimeout = 120.0
+    var retryAttempts = 3
+    var retryBackoff = true
+    var rememberProvider = true
+    var allowFallback = false
+    // x-opencode-session value: stable for one conversation (initial prompt +
+    // compile-repair rounds + retries all reuse it), new id per conversation.
+    // Runtime-only — never written to config.json.
+    var sessionId = UUID().uuidString
+    // Request streaming (SSE) replies. If the server rejects that shape with a
+    // 400, the adapter retries once in the verified non-streaming shape
+    // (the baseline curl contract, HTTP 200 confirmed). Internal, not persisted.
+    var ocStream = true
+
+    static func load() -> DropConfig {
+        var c = DropConfig()
+        guard let data = try? Data(contentsOf: CONFIG_URL),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return c }
+        if let v = obj["provider"] as? String { c.provider = v }
+        if let o = obj["ollama"] as? [String: Any] {
+            if let v = o["base_url"] as? String, !v.isEmpty { c.ollamaBase = v }
+            if let v = o["default_model"] as? String { c.ollamaDefaultModel = v }
+            if let v = o["context"] as? Int, v >= 0 { c.ollamaContext = v }
+        }
+        if let o = obj["opencode_go"] as? [String: Any] {
+            if let v = o["base_url"] as? String, !v.isEmpty { c.ocBase = v }
+            if let v = o["api_key"] as? String { c.ocKey = v }
+            if let v = o["model"] as? String, !v.isEmpty { c.ocModel = v }
+        }
+        if let n = obj["network"] as? [String: Any] {
+            if let v = n["connect_timeout"] as? Double { c.connectTimeout = v }
+            else if let v = n["connect_timeout"] as? Int { c.connectTimeout = Double(v) }
+            if let v = n["stream_idle_timeout"] as? Double { c.streamIdleTimeout = v }
+            else if let v = n["stream_idle_timeout"] as? Int { c.streamIdleTimeout = Double(v) }
+            if let v = n["retry_attempts"] as? Int { c.retryAttempts = v }
+            if let v = n["retry_backoff"] as? Bool { c.retryBackoff = v }
+        }
+        if let p = obj["preferences"] as? [String: Any] {
+            if let v = p["remember_provider"] as? Bool { c.rememberProvider = v }
+            if let v = p["allow_fallback"] as? Bool { c.allowFallback = v }
+        }
+        return c
+    }
+
+    func save() {
+        let obj: [String: Any] = [
+            "provider": provider,
+            "ollama": ["base_url": ollamaBase, "default_model": ollamaDefaultModel, "context": ollamaContext],
+            "opencode_go": ["base_url": ocBase, "api_key": ocKey, "model": ocModel],
+            "network": ["connect_timeout": connectTimeout, "stream_idle_timeout": streamIdleTimeout,
+                        "retry_attempts": retryAttempts, "retry_backoff": retryBackoff],
+            "preferences": ["remember_provider": rememberProvider, "allow_fallback": allowFallback]
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: CONFIG_URL, options: .atomic)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: CONFIG_URL.path)
+        }
+    }
+
+    // Hardware-aware Ollama context target (conservative presets by system
+    // RAM; a manual `ollama.context` override wins). Applied as a floor in
+    // OllamaProvider.generate alongside the prompt-size sizing, so big papers
+    // still grow the context as before while small requests get the preset.
+    var ollamaTargetContext: Int {
+        guard ollamaContext <= 0 else { return min(ollamaContext, 65536) }
+        // Round to nearest GiB (machines report slightly under nominal RAM).
+        let gib = (ProcessInfo.processInfo.physicalMemory + 536_870_912) / 1_073_741_824
+        switch gib {
+        case ..<16:  return 8192    // 8 GB class  → 8192
+        case 16..<32: return 16384  // 16 GB       → 8192–16384
+        case 32..<64: return 16384  // 32 GB       → 16384–32768 (conservative low end)
+        default:      return 32768  // 64 GB+      → 32768–65536 (conservative low end)
+        }
+    }
+}
+
+// ===== Error classification (Phase 7A): distinct conditions, never one generic blob =====
+enum DropErrorKind {
+    case noInternet, dnsFailure, tcpFailure, tlsFailure, endpointUnreachable
+    case authFailure, modelNotFound, invalidRequest, rateLimited, serverOutage
+    case timeout, interrupted, unknown(String)
+
+    var message: String {
+        switch self {
+        case .noInternet:          return "No internet connection"
+        case .dnsFailure:          return "DNS lookup failed (can't resolve opencode.ai)"
+        case .tcpFailure:          return "Cannot reach the server (connection refused/blocked)"
+        case .tlsFailure:          return "TLS certificate error"
+        case .endpointUnreachable: return "API endpoint unreachable – this network may restrict access"
+        case .authFailure:         return "Invalid API key (401/403)"
+        case .modelNotFound:       return "Endpoint or model not found (404)"
+        case .invalidRequest:      return "Invalid request (400)"
+        case .rateLimited:         return "Rate limited (429)"
+        case .serverOutage:        return "Provider server error (5xx)"
+        case .timeout:             return "Request timed out"
+        case .interrupted:         return "Stream interrupted"
+        case .unknown(let d):      return d
+        }
+    }
+    var isTransient: Bool {
+        switch self {
+        case .noInternet, .dnsFailure, .tcpFailure, .endpointUnreachable, .rateLimited, .serverOutage, .timeout:
+            return true
+        default: return false
+        }
+    }
+}
+
+struct DropError: Error {
+    let kind: DropErrorKind
+    var retryAfter: TimeInterval? = nil
+    // Server-provided explanation (e.g. WHY a 400 happened), parsed defensively
+    // from the error body. Never contains the API key; capped at 200 chars.
+    var detail: String? = nil
+
+    var displayMessage: String {
+        guard let d = detail, !d.isEmpty else { return kind.message }
+        return "\(kind.message) — \(d)"
+    }
+}
+
+func classifyURLError(_ error: Error) -> DropError {
+    if let e = error as? DropError { return e }
+    let ns = error as NSError
+    if ns.domain == NSURLErrorDomain {
+        switch ns.code {
+        case NSURLErrorNotConnectedToInternet: return DropError(kind: .noInternet)
+        case NSURLErrorDNSLookupFailed, NSURLErrorCannotFindHost: return DropError(kind: .dnsFailure)
+        case NSURLErrorCannotConnectToHost: return DropError(kind: .tcpFailure)
+        case NSURLErrorSecureConnectionFailed, NSURLErrorServerCertificateUntrusted,
+             NSURLErrorServerCertificateHasBadDate, NSURLErrorServerCertificateHasUnknownRoot,
+             NSURLErrorServerCertificateNotYetValid: return DropError(kind: .tlsFailure)
+        case NSURLErrorTimedOut: return DropError(kind: .timeout)
+        case NSURLErrorCancelled: return DropError(kind: .unknown("Cancelled"))
+        default: break
+        }
+    }
+    return DropError(kind: .unknown(error.localizedDescription))
+}
+
+func classifyHTTP(status: Int, retryAfterHeader: String?, detail: String? = nil) -> DropError {
+    var ra: TimeInterval? = nil
+    if let h = retryAfterHeader, let secs = TimeInterval(h) { ra = secs }
+    switch status {
+    case 400: return DropError(kind: .invalidRequest, retryAfter: nil, detail: detail)
+    case 401, 403: return DropError(kind: .authFailure, retryAfter: nil, detail: detail)
+    case 404: return DropError(kind: .modelNotFound, retryAfter: nil, detail: detail)
+    case 408: return DropError(kind: .timeout, retryAfter: ra, detail: detail)
+    case 429: return DropError(kind: .rateLimited, retryAfter: ra, detail: detail)
+    case 500...599: return DropError(kind: .serverOutage, retryAfter: ra, detail: detail)
+    default: return DropError(kind: .unknown("HTTP \(status)"), retryAfter: ra, detail: detail)
+    }
+}
+
+// Best-effort extraction of the provider's own explanation from an error body.
+// Handles {"error":{"message":…}}, {"error":"…"}, {"message":…}, {"detail":…}.
+// Returns nil for non-JSON or unknown shapes (never fabricates a message).
+func errorDetail(from body: String) -> String? {
+    guard !body.isEmpty,
+          let data = body.data(using: .utf8),
+          let obj = try? JSONSerialization.jsonObject(with: data) else { return nil }
+    if let d = obj as? [String: Any] {
+        if let e = d["error"] as? [String: Any], let m = e["message"] as? String { return String(m.prefix(200)) }
+        if let e = d["error"] as? String, !e.isEmpty { return String(e.prefix(200)) }
+        if let m = d["message"] as? String, !m.isEmpty { return String(m.prefix(200)) }
+        if let m = d["detail"] as? String, !m.isEmpty { return String(m.prefix(200)) }
+    }
+    return nil
+}
+
+// ===== Provider abstraction (Phases 4-5) =====
+enum GenOutcome {
+    case ok(String)
+    case interrupted(String)     // partial content already delivered to the UI
+    case failed(DropError)
+}
+
+protocol ProviderAdapter {
+    var id: String { get }
+    var displayName: String { get }
+    func generate(prompt: String, model: String, label: String,
+                  onChunk: @escaping (String) -> Void,
+                  onStatus: @escaping (String) -> Void) async -> GenOutcome
+    // Optional lightweight model discovery; nil = use configured default only.
+    func listModels() async -> [String]?
+}
+
+// --- Ollama: existing behaviour moved verbatim (streaming, keep_alive, num_ctx) ---
+struct OllamaProvider: ProviderAdapter {
+    let config: DropConfig
+    var id: String { "ollama" }
+    var displayName: String { "Ollama" }
+
+    func generate(prompt: String, model: String, label: String,
+                  onChunk: @escaping (String) -> Void,
+                  onStatus: @escaping (String) -> Void) async -> GenOutcome {
+        var req = URLRequest(url: URL(string: config.ollamaBase + "/api/generate")!)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 900
+        let needed = prompt.count / 3 + 8000
+        var ctx = 8192
+        while ctx < needed && ctx < 65536 { ctx *= 2 }
+        // Hardware-aware target (RAM preset or manual override) as a floor —
+        // prompt-size growth still wins when a large paper needs more, and the
+        // existing 65536 hard cap is unchanged.
+        ctx = min(max(ctx, config.ollamaTargetContext), 65536)
+        let body: [String: Any] = ["model": model, "prompt": prompt, "stream": true,
+                                   "keep_alive": "30m", "options": ["num_ctx": ctx, "temperature": 0.2]]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        var answer = ""
+        do {
+            let (bytes, resp) = try await URLSession.shared.bytes(for: req)
+            if let h = resp as? HTTPURLResponse, h.statusCode != 200 {
+                // Surface Ollama's own reason (e.g. "model 'x' not found").
+                var raw = ""
+                for try await l in bytes.lines {
+                    raw += l
+                    if raw.count > 1024 { break }
+                }
+                return .failed(classifyHTTP(status: h.statusCode,
+                                            retryAfterHeader: h.value(forHTTPHeaderField: "Retry-After"),
+                                            detail: errorDetail(from: raw)))
+            }
+            for try await line in bytes.lines {
+                guard let d = line.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
+                if let e = obj["error"] as? String {
+                    return .failed(DropError(kind: .unknown("Ollama: \(e)")))
+                }
+                if let piece = obj["response"] as? String, !piece.isEmpty {
+                    answer += piece
+                    onChunk(piece)
+                    onStatus("\(label)… \(answer.count) chars")
+                }
+            }
+            return .ok(answer)
+        } catch {
+            let e = classifyURLError(error)
+            if !answer.isEmpty { return .interrupted(answer) }
+            return .failed(e)
+        }
+    }
+
+    // Qwen-family discovery from GET /api/tags: model metadata first
+    // (details.family / details.families), falling back to the model name.
+    // All installed Qwen variants are offered — no single hardcoded model.
+    static func isQwenFamily(_ m: [String: Any]) -> Bool {
+        if let d = m["details"] as? [String: Any] {
+            var fams: [String] = []
+            if let f = d["family"] as? String { fams.append(f) }
+            if let fs = d["families"] as? [String] { fams += fs }
+            if fams.contains(where: { $0.lowercased().contains("qwen") }) { return true }
+        }
+        if let n = m["name"] as? String, n.lowercased().contains("qwen") { return true }
+        return false
+    }
+
+    func listModels() async -> [String]? {
+        guard let url = URL(string: config.ollamaBase + "/api/tags") else { return nil }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let models = obj["models"] as? [[String: Any]] else { return nil }
+            let names = models
+                .filter { !(($0["name"] as? String) ?? "").contains("cloud") }
+                .filter { OllamaProvider.isQwenFamily($0) }
+                .compactMap { $0["name"] as? String }
+                .sorted()
+            return names
+        } catch { return nil }
+    }
+}
+
+// --- OpenCode Go: direct HTTPS, Bearer auth, SSE streaming, retries with backoff+jitter ---
+struct OpenCodeGoProvider: ProviderAdapter {
+    let config: DropConfig
+    var id: String { "opencode_go" }
+    var displayName: String { "OpenCode Go" }
+
+    private var endpoint: URL? {
+        let base = config.ocBase.hasSuffix("/") ? String(config.ocBase.dropLast()) : config.ocBase
+        return URL(string: base + "/chat/completions")
+    }
+
+    func generate(prompt: String, model: String, label: String,
+                  onChunk: @escaping (String) -> Void,
+                  onStatus: @escaping (String) -> Void) async -> GenOutcome {
+        guard !config.ocKey.isEmpty else { return .failed(DropError(kind: .authFailure)) }
+        guard let url = endpoint else { return .failed(DropError(kind: .endpointUnreachable)) }
+
+        let attempts = max(1, config.retryAttempts)
+        let stream = config.ocStream
+        var lastError = DropError(kind: .endpointUnreachable)
+        for attempt in 0..<attempts {
+            if attempt > 0 && config.retryBackoff {
+                // Exponential backoff + jitter; honour Retry-After when the provider sent one.
+                let base = pow(2.0, Double(attempt - 1))
+                let jitter = Double.random(in: 0...0.5)
+                let delay = max(lastError.retryAfter ?? 0, base + jitter)
+                onStatus("⏳ Retry \(attempt)/\(attempts - 1) in \(String(format: "%.1f", delay))s…")
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            var res = await attemptOnce(url: url, prompt: prompt, model: model,
+                                        label: label, stream: stream,
+                                        onChunk: onChunk, onStatus: onStatus)
+            if case .failed(let e) = res, stream, case .invalidRequest = e.kind {
+                // Streaming shape rejected (400): retry exactly once in the
+                // non-streaming shape the baseline test verified (HTTP 200).
+                onStatus("⚠️ Streaming rejected – retrying non-streaming…")
+                res = await attemptOnce(url: url, prompt: prompt, model: model,
+                                        label: label, stream: false,
+                                        onChunk: onChunk, onStatus: onStatus)
+            }
+            switch res {
+            case .ok(let a): return .ok(a)
+            case .interrupted(let partial): return .interrupted(partial)
+            case .failed(let e):
+                lastError = e
+                // Only transient errors are retried; auth/400/404 fail fast.
+                if !e.kind.isTransient { return .failed(e) }
+            }
+        }
+        return .failed(lastError)
+    }
+
+    private func attemptOnce(url: URL, prompt: String, model: String, label: String,
+                             stream: Bool,
+                             onChunk: @escaping (String) -> Void,
+                             onStatus: @escaping (String) -> Void) async -> GenOutcome {
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer " + config.ocKey, forHTTPHeaderField: "Authorization")
+        req.setValue("Drop/1.0", forHTTPHeaderField: "User-Agent")
+        req.setValue(config.sessionId, forHTTPHeaderField: "x-opencode-session")
+        req.timeoutInterval = config.streamIdleTimeout   // idle timeout; long generations keep streaming
+        // Exact shape of the verified (200 OK) baseline request — no extra fields.
+        let body: [String: Any] = [
+            "model": model,
+            "messages": [["role": "user", "content": prompt]],
+            "stream": stream
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        var answer = ""
+        do {
+            let (bytes, resp) = try await URLSession.shared.bytes(for: req)
+            if let h = resp as? HTTPURLResponse, h.statusCode != 200 {
+                // Capture the error body for diagnostics (never contains the key).
+                var raw = ""
+                for try await l in bytes.lines {
+                    raw += l
+                    if raw.count > 2048 { break }
+                }
+                return .failed(classifyHTTP(status: h.statusCode,
+                                            retryAfterHeader: h.value(forHTTPHeaderField: "Retry-After"),
+                                            detail: errorDetail(from: raw)))
+            }
+            // Standard OpenAI-compatible SSE: data: {...} … data: [DONE]
+            var plain = ""   // non-SSE lines, kept for a single-object JSON fallback
+            for try await line in bytes.lines {
+                let t = line.trimmingCharacters(in: .whitespaces)
+                guard t.hasPrefix("data:") else {
+                    if plain.count < 4_194_304 { plain += line + "\n" }
+                    continue
+                }
+                let payload = String(t.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                if payload == "[DONE]" { break }   // stream finished normally
+                guard let d = payload.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue } // malformed chunk: skip safely
+                if let errObj = obj["error"] {
+                    var msg = String(describing: errObj)
+                    if let d = errObj as? [String: Any], let m = d["message"] as? String { msg = m }
+                    if answer.isEmpty { return .failed(DropError(kind: .unknown(msg))) }
+                    return .interrupted(answer)
+                }
+                if let choices = obj["choices"] as? [[String: Any]],
+                   let delta = choices.first?["delta"] as? [String: Any],
+                   let piece = delta["content"] as? String, !piece.isEmpty {
+                    answer += piece
+                    onChunk(piece)
+                    onStatus("\(label)… \(answer.count) chars")
+                }
+            }
+            if answer.isEmpty {
+                // Server replied with one chat.completion JSON object instead of
+                // an SSE stream (stream ignored or stream:false) — parse it properly.
+                if let s = OpenCodeGoProvider.chatContent(from: plain) {
+                    onChunk(s)
+                    return .ok(s)
+                }
+                if let d = errorDetail(from: plain) {
+                    return .failed(DropError(kind: .unknown(d)))
+                }
+                return .failed(DropError(kind: .interrupted))
+            }
+            return .ok(answer)
+        } catch {
+            let e = classifyURLError(error)
+            // Content already shown to the user: never replay the request (would duplicate output).
+            if !answer.isEmpty { return .interrupted(answer) }
+            return .failed(e)
+        }
+    }
+
+    // GET {base}/models is OpenAI-compatible and free; fall back to the configured model.
+    func listModels() async -> [String]? {
+        guard !config.ocKey.isEmpty, let base = URL(string: config.ocBase.hasSuffix("/")
+              ? String(config.ocBase.dropLast()) : config.ocBase) else { return nil }
+        guard let url = URL(string: base.absoluteString + "/models") else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue("Bearer " + config.ocKey, forHTTPHeaderField: "Authorization")
+        req.setValue("Drop/1.0", forHTTPHeaderField: "User-Agent")
+        req.setValue(config.sessionId, forHTTPHeaderField: "x-opencode-session")
+        req.timeoutInterval = config.connectTimeout
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard let h = resp as? HTTPURLResponse, h.statusCode == 200,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let arr = obj["data"] as? [[String: Any]] else { return nil }
+            let ids = arr.compactMap { $0["id"] as? String }
+            return ids.isEmpty ? nil : ids
+        } catch { return nil }
+    }
+
+    // Extracts content from a single chat.completion JSON object
+    // ({"choices":[{"message":{"content":…}}]} — the non-streaming reply shape).
+    static func chatContent(from body: String) -> String? {
+        guard let data = body.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = obj["choices"] as? [[String: Any]],
+              let msg = choices.first?["message"] as? [String: Any],
+              let content = msg["content"] as? String,
+              !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return content
+    }
+}
+
 final class FloatPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 }
@@ -177,15 +664,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var textView: NSTextView { scroll.documentView as! NSTextView }
     let mono = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
     var expandBtn: NSButton!
+    var providerBtn: NSButton!
     var statusItem: NSStatusItem!
     var hotKeyRef: EventHotKeyRef?
     var running = false
     var starterFiles: [String: String] = [:]
     var lastAnswer = ""
+    // Remembered so an approved provider fallback can answer the SAME request.
+    var lastPrompt: String?
+    var lastModel: String?
+    var lastLabel: String?
     var expanded = false
+    var config = DropConfig.load()
     let W: CGFloat = 230
-    let compactH: CGFloat = 68
+    let compactH: CGFloat = 94    // drop row + dynamic model selector + button row
     let answerH: CGFloat = 240
+
+    var activeProvider: ProviderAdapter {
+        config.provider == "opencode_go"
+            ? OpenCodeGoProvider(config: config)
+            : OllamaProvider(config: config)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
@@ -218,7 +717,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         modelPopup.font = NSFont.systemFont(ofSize: 11)
         modelPopup.target = self
         modelPopup.action = #selector(modelChanged)
-        modelPopup.addItem(withTitle: DEFAULT_MODEL)
+        modelPopup.toolTip = "Installed Qwen models (discovered from Ollama)"
 
         func small(_ title: String, _ sel: Selector) -> NSButton {
             let b = NSButton(title: title, target: self, action: sel)
@@ -231,9 +730,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         expandBtn = small("Share ▾", #selector(toggleAnswer))
         let quitBtn = small("✕", #selector(hidePanel))
         quitBtn.toolTip = "Hide (click the menu bar icon to show again)"
+        providerBtn = small(config.provider == "ollama" ? "🦙 Ollama" : "☁️ OpenCode", #selector(toggleProvider))
+        providerBtn.toolTip = "Switch provider (Ollama local / OpenCode Go cloud)"
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let row = NSStackView(views: [spacer, copyBtn, expandBtn, quitBtn])
+        let row = NSStackView(views: [providerBtn, spacer, copyBtn, expandBtn, quitBtn])
         row.spacing = 6
 
         textView.isEditable = false
@@ -242,7 +743,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scroll.drawsBackground = false
         scroll.isHidden = true
 
-        let stack = NSStackView(views: [dropView, row, scroll])
+        let stack = NSStackView(views: [dropView, modelPopup, row, scroll])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 5
@@ -255,6 +756,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             stack.bottomAnchor.constraint(lessThanOrEqualTo: fx.bottomAnchor, constant: -8),
             dropView.heightAnchor.constraint(equalToConstant: 30),
             dropView.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            modelPopup.widthAnchor.constraint(equalTo: stack.widthAnchor),
             row.widthAnchor.constraint(equalTo: stack.widthAnchor),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
             scroll.heightAnchor.constraint(equalToConstant: answerH - 5),
@@ -272,8 +774,152 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         registerHotKey()
         panel.orderFrontRegardless()
-        setStatus("Connecting to Ollama…")
+        setStatus(config.provider == "opencode_go" ? "Connecting to OpenCode Go…" : "Connecting to Ollama…")
         loadModels()
+    }
+
+    // ===== Settings (Phase 6): provider, API key, connection test =====
+    var settingsWin: NSWindow?
+    var keyField: NSSecureTextField!
+    var baseField: NSTextField!
+    var modelField: NSTextField!
+    var contextField: NSTextField!
+    var testStatus: NSTextField!
+
+    @objc func openSettings() {
+        if settingsWin == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 258),
+                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            w.title = "Drop Settings"
+            let stack = NSStackView(frame: NSRect(x: 12, y: 12, width: 356, height: 234))
+            stack.orientation = .vertical
+            stack.alignment = .leading
+            stack.spacing = 8
+
+            func labeled(_ label: String, _ field: NSView) -> NSView {
+                let l = NSTextField(labelWithString: label)
+                l.font = NSFont.systemFont(ofSize: 11)
+                l.translatesAutoresizingMaskIntoConstraints = false
+                let h = NSStackView(views: [l, field])
+                h.orientation = .horizontal
+                h.spacing = 6
+                l.widthAnchor.constraint(equalToConstant: 90).isActive = true
+                return h
+            }
+
+            baseField = NSTextField(string: config.provider == "ollama" ? config.ollamaBase : config.ocBase)
+            keyField = NSSecureTextField(string: config.ocKey)
+            keyField.placeholderString = "oc_… (OpenCode Go only)"
+            modelField = NSTextField(string: config.ocModel)
+            // Ollama-only context override (0 = hardware preset). Stored in the
+            // ollama config section; OpenCode Go is unaffected by this field.
+            contextField = NSTextField(string: "\(config.ollamaContext)")
+            contextField.placeholderString = "0 = auto (RAM preset)"
+            for f in [baseField!, keyField!, modelField!, contextField!] as [NSTextField] {
+                f.translatesAutoresizingMaskIntoConstraints = false
+                f.widthAnchor.constraint(equalToConstant: 250).isActive = true
+            }
+
+            let fallback = NSButton(checkboxWithTitle: "Offer Ollama fallback if OpenCode Go fails",
+                                    target: self, action: #selector(fallbackToggled))
+            fallback.state = config.allowFallback ? .on : .off
+            let remember = NSButton(checkboxWithTitle: "Remember selected provider",
+                                    target: self, action: #selector(rememberToggled))
+            remember.state = config.rememberProvider ? .on : .off
+
+            let testBtn = NSButton(title: "Test Connection", target: self, action: #selector(testConnection))
+            let saveBtn = NSButton(title: "Save", target: self, action: #selector(saveSettings))
+            let btnRow = NSStackView(views: [testBtn, saveBtn])
+            btnRow.orientation = .horizontal
+            btnRow.spacing = 8
+
+            testStatus = NSTextField(labelWithString: "")
+            testStatus.font = NSFont.systemFont(ofSize: 11)
+            testStatus.lineBreakMode = .byTruncatingTail
+            testStatus.maximumNumberOfLines = 2
+
+            stack.addArrangedSubview(labeled("Base URL", baseField))
+            stack.addArrangedSubview(labeled("API key", keyField))
+            stack.addArrangedSubview(labeled("Model", modelField))
+            stack.addArrangedSubview(labeled("Qwen ctx", contextField))
+            stack.addArrangedSubview(fallback)
+            stack.addArrangedSubview(remember)
+            stack.addArrangedSubview(btnRow)
+            stack.addArrangedSubview(testStatus)
+            w.contentView?.addSubview(stack)
+            settingsWin = w
+        }
+        // Prefill current values each time it opens
+        baseField.stringValue = config.provider == "ollama" ? config.ollamaBase : config.ocBase
+        keyField.stringValue = config.ocKey
+        modelField.stringValue = config.ocModel
+        contextField.stringValue = "\(config.ollamaContext)"
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWin?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc func fallbackToggled(_ s: NSButton) { config.allowFallback = (s.state == .on); config.save() }
+    @objc func rememberToggled(_ s: NSButton) { config.rememberProvider = (s.state == .on); config.save() }
+
+    @objc func saveSettings() {
+        // Never wipe a stored key with an empty field (Phase 3).
+        let newKey = keyField.stringValue
+        if !newKey.isEmpty { config.ocKey = newKey }
+        let newBase = baseField.stringValue.trimmingCharacters(in: .whitespaces)
+        if !newBase.isEmpty {
+            if config.provider == "ollama" { config.ollamaBase = newBase } else { config.ocBase = newBase }
+        }
+        let newModel = modelField.stringValue.trimmingCharacters(in: .whitespaces)
+        if !newModel.isEmpty && config.provider == "opencode_go" { config.ocModel = newModel }
+        // Ollama context override (0 = hardware preset); never touches opencode_go.
+        if let v = Int(contextField.stringValue.trimmingCharacters(in: .whitespaces)), v >= 0 {
+            config.ollamaContext = v
+        }
+        config.save()   // re-asserts 0600
+        testStatus.stringValue = "Saved (key stored locally, 0600)"
+        loadModels()
+    }
+
+    // Phase 6: Test Connection — real authenticated ping, key never displayed.
+    @objc func testConnection() {
+        saveSettings()
+        let cfg = config
+        testStatus.stringValue = "Testing…"
+        Task { @MainActor in
+            if cfg.provider == "ollama" {
+                let o = OllamaProvider(config: cfg)
+                if let names = await o.listModels(), !names.isEmpty {
+                    testStatus.stringValue = "✅ Ollama OK – \(names.count) model(s)"
+                } else {
+                    testStatus.stringValue = "❌ Ollama not reachable at \(cfg.ollamaBase)"
+                }
+            } else {
+                if cfg.ocKey.isEmpty {
+                    testStatus.stringValue = "❌ Enter an API key first"
+                    return
+                }
+                // Tiny real request proves endpoint + key + model together.
+                // Single attempt, connect_timeout budget: a blocked network
+                // should fail the TEST quickly instead of sitting in retries.
+                var testCfg = cfg
+                testCfg.retryAttempts = 1
+                testCfg.streamIdleTimeout = cfg.connectTimeout
+                testCfg.sessionId = UUID().uuidString   // the test is its own conversation
+                testCfg.ocStream = false                // exact baseline request (verified 200 OK)
+                let oc = OpenCodeGoProvider(config: testCfg)
+                let out = await oc.generate(prompt: "Reply with exactly: Drop connection successful",
+                                            model: cfg.ocModel, label: "Testing",
+                                            onChunk: { _ in }, onStatus: { _ in })
+                switch out {
+                case .ok(let a):
+                    testStatus.stringValue = "✅ OpenCode Go OK – \(a.trimmingCharacters(in: .whitespacesAndNewlines).prefix(30))"
+                case .interrupted:
+                    testStatus.stringValue = "✅ OpenCode Go OK (stream ended early)"
+                case .failed(let e):
+                    testStatus.stringValue = "❌ \(e.displayMessage)"
+                }
+            }
+        }
     }
 
     func buildMenu() {
@@ -294,30 +940,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func setStatus(_ s: String) { dropView.subtitle = s }
 
+    // Provider-aware discovery: Ollama hits localhost /api/tags; OpenCode Go hits
+    // GET {base}/models with the stored key. No cross-talk: each path only talks
+    // to its own endpoint (Phase 5: no localhost:11434 requests when OpenCode selected).
     func loadModels() {
+        let provider = activeProvider
+        let cfg = config
         Task { @MainActor in
-            do {
-                let (data, _) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:11434/api/tags")!)
-                let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-                let names = ((obj?["models"] as? [[String: Any]]) ?? [])
-                    .compactMap { $0["name"] as? String }
-                    .filter { !$0.contains("cloud") }
+            if provider.id == "opencode_go" && cfg.ocKey.isEmpty {
                 modelPopup.removeAllItems()
-                modelPopup.addItems(withTitles: names.isEmpty ? [DEFAULT_MODEL] : names)
-                if let saved = UserDefaults.standard.string(forKey: "model"), names.contains(saved) {
-                    modelPopup.selectItem(withTitle: saved)
-                } else if let m = names.first(where: { $0.hasPrefix(DEFAULT_MODEL) }) {
-                    modelPopup.selectItem(withTitle: m)
+                modelPopup.addItem(withTitle: cfg.ocModel)
+                setStatus("⚠️ No OpenCode API key – open Settings (gear in tray)")
+                return
+            }
+            let names = await provider.listModels()
+            modelPopup.removeAllItems()
+            // Ollama: only installed Qwen-family models (discovered from
+            // /api/tags — never a hardcoded name). OpenCode Go list handling
+            // unchanged.
+            let list: [String]
+            if provider.id == "ollama" {
+                list = (names?.isEmpty == false) ? names! : []
+            } else {
+                list = (names?.isEmpty == false) ? names! : [cfg.ocModel]
+            }
+            modelPopup.addItems(withTitles: list)
+            let savedKey = provider.id == "ollama" ? "model" : "oc_model"
+            var missingSaved: String? = nil
+            if let saved = UserDefaults.standard.string(forKey: savedKey), list.contains(saved) {
+                modelPopup.selectItem(withTitle: saved)
+            } else if provider.id == "ollama" {
+                // Saved model no longer installed → never select a model that
+                // does not exist; fall back to an existing one (or leave the
+                // dropdown empty when no Qwen model is installed at all).
+                if let saved = UserDefaults.standard.string(forKey: "model"), !saved.isEmpty, !list.isEmpty {
+                    missingSaved = saved
                 }
-                setStatus("Ready · click to choose files")
-            } catch {
+                if !list.isEmpty { modelPopup.selectItem(at: 0) }
+            } else if provider.id == "opencode_go", let m = list.first(where: { $0 == cfg.ocModel }) {
+                modelPopup.selectItem(withTitle: m)
+            }
+            if provider.id == "opencode_go" {
+                setStatus(names != nil ? "OpenCode Go ready · \(list.count) model(s)" : "OpenCode Go · \(cfg.ocModel)")
+            } else if names == nil {
                 setStatus("⚠️ Ollama not running – open the Ollama app")
+            } else if list.isEmpty {
+                setStatus("⚠️ No Qwen models installed – ollama pull a Qwen model first")
+            } else if let m = missingSaved {
+                setStatus("⚠️ Saved model “\(m)” not installed · using “\(list[0])”")
+            } else {
+                setStatus("Ready · click to choose files")
             }
         }
     }
 
     @objc func modelChanged() {
-        UserDefaults.standard.set(modelPopup.titleOfSelectedItem, forKey: "model")
+        let key = config.provider == "ollama" ? "model" : "oc_model"
+        UserDefaults.standard.set(modelPopup.titleOfSelectedItem, forKey: key)
+        if config.provider == "opencode_go", let m = modelPopup.titleOfSelectedItem {
+            config.ocModel = m
+            config.save()
+        } else if config.provider == "ollama", let m = modelPopup.titleOfSelectedItem {
+            // Mirror the selection into config (local file, same 0600 rules).
+            config.ollamaDefaultModel = m
+            config.save()
+        }
+    }
+
+    // Phase 6: toggle button in the popup switches provider; never silent — user clicks.
+    @objc func toggleProvider() {
+        guard !running else { setStatus("⏳ Busy – wait before switching"); return }
+        config.provider = config.provider == "ollama" ? "opencode_go" : "ollama"
+        if config.rememberProvider { config.save() }
+        providerBtn.title = config.provider == "ollama" ? "🦙 Ollama" : "☁️ OpenCode"
+        modelPopup.removeAllItems()
+        // Ollama items arrive from loadModels() a moment later (discovered
+        // Qwen models only); OpenCode Go keeps its configured model.
+        if config.provider != "ollama" { modelPopup.addItem(withTitle: config.ocModel) }
+        setStatus(config.provider == "ollama" ? "Ollama selected · local only"
+                                              : "OpenCode Go selected · cloud")
+        loadModels()
     }
 
     @objc func chooseFiles() {
@@ -371,7 +1073,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func togglePanel() {
-        if panel.isVisible { panel.orderOut(nil) } else { panel.orderFrontRegardless() }
+        if panel.isVisible {
+            panel.orderOut(nil)
+        } else {
+            panel.orderFrontRegardless()
+            // Refresh the Qwen list when shown (newly installed / removed models
+            // are picked up). Ollama-only: OpenCode Go never gets extra traffic.
+            if config.provider == "ollama" && !running { loadModels() }
+        }
     }
 
     @objc func statusClicked() {
@@ -383,6 +1092,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let copy = NSMenuItem(title: "Copy last answer", action: #selector(copyAgain), keyEquivalent: "")
             copy.target = self
             m.addItem(copy)
+            let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+            settings.target = self
+            m.addItem(settings)
             m.addItem(.separator())
             let q = NSMenuItem(title: "Quit Drop", action: #selector(quit), keyEquivalent: "q")
             q.target = self
@@ -507,7 +1219,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                       : "⚠️ No readable text (scanned PDF?)")
             return
         }
-        let model = modelPopup.titleOfSelectedItem ?? DEFAULT_MODEL
+        // The popup only ever holds models that exist (Ollama: installed Qwen
+        // models; OpenCode: configured model) — never send a nonexistent one.
+        guard let model = modelPopup.titleOfSelectedItem, !model.isEmpty else {
+            setStatus(config.provider == "ollama"
+                      ? "⚠️ No Qwen model installed – ollama pull a Qwen model first"
+                      : "⚠️ No model selected")
+            return
+        }
+        // New conversation → new x-opencode-session id, reused by every
+        // request of this run (prompt, repair rounds, retries).
+        config.sessionId = UUID().uuidString
         running = true
         textView.string = ""
         dropView.title = urls.count == 1 ? urls[0].lastPathComponent : "\(urls.count) files"
@@ -766,42 +1488,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return ctx
     }
 
+    // Single entry point for ALL providers (Phase 9: shared pipeline).
+    // The repair loop in handle() calls this too, so both providers get
+    // compile-check + two repair rounds for free.
     @MainActor
     func generate(prompt: String, model: String, label: String) async -> String? {
-        var req = URLRequest(url: URL(string: "http://127.0.0.1:11434/api/generate")!)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.timeoutInterval = 900
-        let body: [String: Any] = ["model": model, "prompt": prompt, "stream": true,
-                                   "keep_alive": "30m", "options": ["num_ctx": contextSize(for: prompt), "temperature": 0.2]]
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        var answer = ""
-        do {
-            let (bytes, resp) = try await URLSession.shared.bytes(for: req)
-            if let h = resp as? HTTPURLResponse, h.statusCode != 200 {
-                var err = ""
-                for try await l in bytes.lines { err += l }
-                setStatus("❌ Ollama error \(h.statusCode)")
-                textView.string = err
+        let provider = activeProvider
+        lastPrompt = prompt
+        lastModel = model
+        lastLabel = label
+        let outcome = await provider.generate(
+            prompt: prompt, model: model, label: label,
+            // Adapters run off the main actor; hop before touching AppKit (chunks
+            // dispatch in FIFO order, so output order is preserved).
+            onChunk: { [weak self] piece in
+                DispatchQueue.main.async {
+                    guard let self = self else { return }
+                    self.textView.textStorage?.append(NSAttributedString(string: piece, attributes: [
+                        .font: self.mono,
+                        .foregroundColor: NSColor.textColor]))
+                    self.textView.scrollToEndOfDocument(nil)
+                }
+            },
+            onStatus: { [weak self] s in
+                DispatchQueue.main.async { self?.setStatus(s) }
+            })
+        switch outcome {
+        case .ok(let answer):
+            // A "success" with no content would otherwise copy an empty answer.
+            guard !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                setStatus("❌ Empty response from provider")
                 return nil
             }
-            for try await line in bytes.lines {
-                guard let d = line.data(using: .utf8),
-                      let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
-                if let e = obj["error"] as? String { setStatus("❌ \(e)"); return nil }
-                if let piece = obj["response"] as? String, !piece.isEmpty {
-                    answer += piece
-                    textView.textStorage?.append(NSAttributedString(string: piece, attributes: [
-                        .font: mono, .foregroundColor: NSColor.textColor]))
-                    textView.scrollToEndOfDocument(nil)
-                    setStatus("\(label)… \(answer.count) chars")
-                }
-            }
             return answer
-        } catch {
-            setStatus("❌ \(error.localizedDescription)")
-            return nil
+        case .interrupted(let partial):
+            setStatus("⚠️ Stream interrupted – partial answer kept (\(partial.count) chars)")
+            return partial.isEmpty ? nil : partial
+        case .failed(let err):
+            return await handleGenerationFailure(err, provider: provider)
         }
+    }
+
+    // Phase 7A/7F: distinct diagnostics + optional, user-approved Ollama fallback.
+    // Returns an answer if the user approved the switch and the fallback
+    // succeeded; nil otherwise (the caller's pipeline then stops cleanly).
+    @MainActor
+    func handleGenerationFailure(_ err: DropError, provider: ProviderAdapter) async -> String? {
+        // Never echo the key; classified message + server detail contain no credentials.
+        setStatus("❌ \(err.displayMessage)")
+        textView.string = ""
+        guard provider.id == "opencode_go" else { return nil }
+        // Phase 8: fallback only ever PROPOSED, requires explicit approval, off by default.
+        guard config.allowFallback else { return nil }
+        let ollama = OllamaProvider(config: config)
+        guard let names = await ollama.listModels(), !names.isEmpty else { return nil }
+        let a = NSAlert()
+        a.messageText = "OpenCode Go unavailable"
+        a.informativeText = "\(err.displayMessage).\n\nOllama is running locally with \(names.count) model(s). Switch to Ollama for this answer?"
+        a.addButton(withTitle: "Switch to Ollama")
+        a.addButton(withTitle: "Stay on OpenCode Go")
+        if a.runModal() == .alertFirstButtonReturn {
+            config.provider = "ollama"
+            config.save()
+            providerBtn.title = "🦙 Ollama"
+            setStatus("Switched to Ollama (local) · retrying…")
+            loadModels()
+            // Re-send the exact same request through the approved provider.
+            // If Ollama also fails this returns nil (no fallback loop: the
+            // provider guard above stops any second proposal).
+            guard let lp = lastPrompt else { return nil }
+            // lastModel is the OpenCode model (mimo…) — Ollama needs one of
+            // ITS installed Qwen models instead: the saved selection if still
+            // installed, otherwise the first discovered Qwen model.
+            let preferred = UserDefaults.standard.string(forKey: "model")
+            guard let ollamaModel = (preferred.flatMap { names.contains($0) ? $0 : nil }) ?? names.first
+            else { return nil }
+            return await generate(prompt: lp, model: ollamaModel, label: lastLabel ?? "✍️ Writing")
+        }
+        return nil
     }
 }
 
