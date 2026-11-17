@@ -1058,18 +1058,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setStatus(!cur ? "Double-check on" : "Double-check off")
     }
 
-    // Control + Option + D shows / hides the popup from anywhere
+    // Control + Option + D shows / hides the popup from anywhere; the other
+    // IntelliJ-workflow hotkeys dispatch by EventHotKeyID id (plan
+    // docs/superpowers/plans/2026-11-18-intellij-hotkeys.md):
+    // 1 = ⌃⌥D toggle, 2 = ⌃⌥R OOP run, 3 = ⌃⌥C copy-all, 4…13 = ⌃⌥1…9,0 task copy.
     func registerHotKey() {
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, userData in
-            guard let userData = userData else { return noErr }
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, userData in
+            guard let userData = userData, let event = event else { return noErr }
             let me = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
-            DispatchQueue.main.async { me.togglePanel() }
+            var hkID = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject),
+                              EventParamType(typeEventHotKeyID), nil,
+                              MemoryLayout<EventHotKeyID>.size, nil, &hkID)
+            DispatchQueue.main.async {
+                switch hkID.id {
+                case 1: me.togglePanel()
+                case 2: if me.hotkeyGateAllowed { me.oopRunHotkey() }
+                // ids 3 and 4…13 added in Task 2
+                default: break
+                }
+            }
             return noErr
         }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), nil)
-        let id = EventHotKeyID(signature: OSType(0x44524F50), id: 1)
-        RegisterEventHotKey(UInt32(kVK_ANSI_D), UInt32(controlKey | optionKey), id,
-                            GetApplicationEventTarget(), 0, &hotKeyRef)
+        let mods = UInt32(controlKey | optionKey)
+        let bindings: [(UInt32, UInt32)] = [
+            (UInt32(kVK_ANSI_D), 1), (UInt32(kVK_ANSI_R), 2),
+            (UInt32(kVK_ANSI_C), 3), (UInt32(kVK_ANSI_1), 4), (UInt32(kVK_ANSI_2), 5),
+            (UInt32(kVK_ANSI_3), 6), (UInt32(kVK_ANSI_4), 7), (UInt32(kVK_ANSI_5), 8),
+            (UInt32(kVK_ANSI_6), 9), (UInt32(kVK_ANSI_7), 10), (UInt32(kVK_ANSI_8), 11),
+            (UInt32(kVK_ANSI_9), 12), (UInt32(kVK_ANSI_0), 13)
+        ]
+        for (kc, hid) in bindings {
+            let id = EventHotKeyID(signature: OSType(0x44524F50), id: hid)
+            RegisterEventHotKey(kc, mods, id, GetApplicationEventTarget(), 0, &hotKeyRef)
+        }
     }
 
     @objc func togglePanel() {
@@ -1081,6 +1104,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // are picked up). Ollama-only: OpenCode Go never gets extra traffic.
             if config.provider == "ollama" && !running { loadModels() }
         }
+    }
+
+    // Frontmost gate for the IntelliJ-workflow hotkeys (⌃⌥R/C/1-0): they act
+    // only while IntelliJ IDEA or Drop itself is frontmost; presses elsewhere
+    // are ignored. ⌃⌥D stays global and ungated.
+    var hotkeyGateAllowed: Bool {
+        if let front = NSWorkspace.shared.frontmostApplication {
+            if front.bundleIdentifier == "com.jetbrains.intellij" { return true }
+            if (front.localizedName ?? "").contains("IntelliJ") { return true }
+        }
+        return NSApp.isActive   // Drop itself frontmost → allow (test copies from popup)
+    }
+
+    // ⌃⌥R: read Desktop/OOP and start the run — headless, never opens the
+    // panel (the user opens it manually with ⌃⌥D to watch progress).
+    @objc func oopRunHotkey() {
+        guard !running else { setStatus("⏳ Busy – wait for the current answer"); return }
+        let oop = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop/OOP")
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: oop.path, isDirectory: &isDir),
+              isDir.boolValue else {
+            setStatus("⚠️ OOP folder not found on Desktop"); return
+        }
+        handle([oop])   // handle() never opens the panel
     }
 
     @objc func statusClicked() {
