@@ -169,10 +169,24 @@ public class DropNative : NativeWindow {
     [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr h, int id, uint mod, uint vk);
     [DllImport("user32.dll")] public static extern bool ReleaseCapture();
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, int msg, int w, int l);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr hWnd, out int pid);
     public event EventHandler HotKey;
+    public int LastHotKeyId;   // WM_HOTKEY id, read by the PowerShell dispatcher
     public DropNative() { CreateHandle(new CreateParams()); }
+    public static bool IsIntelliJForeground() {
+        int pid; GetWindowThreadProcessId(GetForegroundWindow(), out pid);
+        try {
+            var p = System.Diagnostics.Process.GetProcessById(pid);
+            var n = p.ProcessName.ToLowerInvariant();
+            return n == "idea64" || n == "idea" || p.MainWindowTitle.Contains("IntelliJ");
+        } catch { return false; }
+    }
     protected override void WndProc(ref Message m) {
-        if (m.Msg == 0x0312 && HotKey != null) { HotKey(this, EventArgs.Empty); }
+        if (m.Msg == 0x0312) {
+            LastHotKeyId = m.WParam.ToInt32();
+            if (HotKey != null) { HotKey(this, EventArgs.Empty); }
+        }
         base.WndProc(ref m);
     }
 }
@@ -626,9 +640,43 @@ function Toggle-Popup {
     }
 }
 
-# Ctrl + Alt + D shows / hides the popup
-[void][DropNative]::RegisterHotKey($native.Handle, 1, (0x0001 -bor 0x0002 -bor 0x4000), 0x44)
-$native.add_HotKey({ Toggle-Popup })
+# Frontmost gate for the IntelliJ-workflow hotkeys (Ctrl+Alt+R/C/1-0): they
+# act only while IntelliJ or Drop itself is frontmost; presses elsewhere are
+# ignored. Ctrl+Alt+D stays global and ungated.
+function Test-DropHotkeyGate {
+    if ([DropNative]::IsIntelliJForeground()) { return $true }
+    return ([DropNative]::GetForegroundWindow() -eq $form.Handle)  # Drop itself frontmost
+}
+
+# Ctrl+Alt+R: read Desktop/OOP and start the run - headless, never opens the
+# popup (the user opens it manually with Ctrl+Alt+D to watch progress).
+function Start-OopRun {
+    if (-not (Test-DropHotkeyGate)) { return }
+    if ($script:Running) { Set-Status 'Busy - wait for the current result'; return }
+    $oop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'OOP'
+    if (-not (Test-Path -LiteralPath $oop -PathType Container)) {
+        Set-Status 'OOP folder not found on Desktop'; return
+    }
+    Start-Answer @($oop)   # headless: never calls Toggle-Popup
+}
+
+# Hotkeys: id 1 = Ctrl+Alt+D (global), 2 = R (OOP run), 3 = C (copy-all,
+# Task 4), 4..13 = 1..9,0 (task copy, Task 4). Dispatch by WndProc-recorded id.
+$mods = (0x0001 -bor 0x0002 -bor 0x4000)   # Ctrl + Alt + no-repeat
+[void][DropNative]::RegisterHotKey($native.Handle, 1, $mods, 0x44)   # D
+$vkMap = [ordered]@{ 2 = 0x52; 3 = 0x43; 4 = 0x31; 5 = 0x32; 6 = 0x33; 7 = 0x34
+                     8 = 0x35; 9 = 0x36; 10 = 0x37; 11 = 0x38; 12 = 0x39; 13 = 0x30 }
+foreach ($id in $vkMap.Keys) {
+    [void][DropNative]::RegisterHotKey($native.Handle, $id, $mods, $vkMap[$id])
+}
+$native.add_HotKey({
+    switch ($native.LastHotKeyId) {
+        1 { Toggle-Popup }
+        2 { Start-OopRun }
+        # ids 3 and 4..13 added in Task 4
+        default { }
+    }
+})
 
 # tray icon
 $tray = New-Object System.Windows.Forms.NotifyIcon
