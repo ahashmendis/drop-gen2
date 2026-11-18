@@ -1075,7 +1075,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 switch hkID.id {
                 case 1: me.togglePanel()
                 case 2: if me.hotkeyGateAllowed { me.oopRunHotkey() }
-                // ids 3 and 4…13 added in Task 2
+                case 3: if me.hotkeyGateAllowed { me.copyAllHotkey() }
+                case 4...13: if me.hotkeyGateAllowed { me.copyTaskHotkey(Int(hkID.id - 3)) }
                 default: break
                 }
             }
@@ -1129,6 +1130,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             setStatus("⚠️ OOP folder not found on Desktop"); return
         }
         handle([oop])   // handle() never opens the panel
+    }
+
+    // ⌃⌥C: copy the full last answer (same clipboard path as the Copy button).
+    @objc func copyAllHotkey() {
+        guard !lastAnswer.isEmpty else { setStatus("No answer yet"); return }
+        copyToClipboard(lastAnswer)
+        setStatus("📋 Answer copied · paste with ⌘V")
+    }
+
+    // ⌃⌥1…0: copy just Task N's section of the last answer, so each task can
+    // be pasted into IntelliJ separately.
+    @objc func copyTaskHotkey(_ n: Int) {
+        guard !lastAnswer.isEmpty else { setStatus("No answer yet"); return }
+        guard let slice = AppDelegate.taskSection(lastAnswer, n: n) else {
+            setStatus("⚠️ Task \(n) not found in answer"); return
+        }
+        copyToClipboard(slice)
+        setStatus("✅ Task \(n) copied · paste with ⌘V")
+    }
+
+    // Slice "…// ===== Task N ===== …" up to (excluding) the next Task header.
+    // hasPrefix("// ===== Task 1 =====") cannot match a Task 10 header, so N=1
+    // is safe. Extracted verbatim by the task-section behavior test.
+    static func taskSection(_ answer: String, n: Int) -> String? {
+        let lines = answer.components(separatedBy: "\n")
+        let header = "// ===== Task \(n) ====="
+        guard let start = lines.firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces).hasPrefix(header)
+        }) else { return nil }
+        var end = lines.count
+        for i in (start + 1)..<lines.count
+        where lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("// ===== Task ") {
+            end = i
+            break
+        }
+        let slice = lines[start..<end].joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return slice.isEmpty ? nil : slice
     }
 
     @objc func statusClicked() {
