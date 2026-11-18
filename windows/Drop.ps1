@@ -199,16 +199,23 @@ public class DropNative : NativeWindow {
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, int msg, int w, int l);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr hWnd, out int pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int c);
     public event EventHandler HotKey;
     public int LastHotKeyId;   // WM_HOTKEY id, read by the PowerShell dispatcher
     public DropNative() { CreateHandle(new CreateParams()); }
     public static bool IsIntelliJForeground() {
-        int pid; GetWindowThreadProcessId(GetForegroundWindow(), out pid);
+        var fg = GetForegroundWindow();
+        int pid; GetWindowThreadProcessId(fg, out pid);
         try {
             var p = System.Diagnostics.Process.GetProcessById(pid);
             var n = p.ProcessName.ToLowerInvariant();
-            return n == "idea64" || n == "idea";   // process name only - no title match (fails closed)
-        } catch { return false; }
+            if (n.StartsWith("idea")) { return true; }   // idea / idea64 (any version)
+        } catch { }
+        // Title fallback (macOS checks the localized name too): IntelliJ
+        // windows carry "IntelliJ" in the title bar even when renamed/packaged.
+        var sb = new System.Text.StringBuilder(512);
+        GetWindowText(fg, sb, sb.Capacity);
+        return sb.ToString().Contains("IntelliJ");
     }
     protected override void WndProc(ref Message m) {
         if (m.Msg == 0x0312) {
@@ -582,6 +589,15 @@ $box.Visible = $false
 $form.Controls.AddRange(@($drop, $cmbModel, $btnProv, $btnCopy, $btnShare, $btnHide, $box))
 
 function Set-Status([string]$s) { $status.Text = $s }
+# Terminal feedback that must reach the user even when the popup is hidden
+# (the hotkey runs are headless): status line when visible, tray balloon when
+# not. Never used for per-chunk streaming progress - outcomes only.
+function Show-Notice([string]$msg) {
+    Set-Status $msg
+    if (-not $form.Visible) {
+        try { $tray.ShowBalloonTip(5000, 'Drop', $msg, [System.Windows.Forms.ToolTipIcon]::Info) } catch { }
+    }
+}
 # Ollama-only status (never called while OpenCode is selected, so the
 # OpenCode status flow is untouched).
 function Set-OllamaStatus {
@@ -776,11 +792,11 @@ function Test-DropHotkeyGate {
 # Ctrl+Alt+R: read Desktop/OOP and start the run - headless, never opens the
 # popup (the user opens it manually with Ctrl+Alt+D to watch progress).
 function Start-OopRun {
-    if (-not (Test-DropHotkeyGate)) { return }
-    if ($script:Running) { Set-Status 'Busy - wait for the current result'; return }
+    if (-not (Test-DropHotkeyGate)) { Show-Notice 'Ctrl+Alt+R ignored - front window must be IntelliJ or Drop'; return }
+    if ($script:Running) { Show-Notice 'Busy - wait for the current result'; return }
     $oop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'OOP'
     if (-not (Test-Path -LiteralPath $oop -PathType Container)) {
-        Set-Status 'OOP folder not found on Desktop'; return
+        Show-Notice 'OOP folder not found on Desktop'; return
     }
     Start-Answer @($oop)   # headless: never calls Toggle-Popup
 }
@@ -814,29 +830,34 @@ function Get-TaskSection([string]$answer, [int]$n) {
 # Ctrl+Alt+C: copy the full last answer (same path as the Copy button).
 function Copy-AllAnswer {
     if (-not (Test-DropHotkeyGate)) { return }
-    if ([string]::IsNullOrWhiteSpace($script:LastAnswer)) { Set-Status 'No answer yet'; return }
+    if ([string]::IsNullOrWhiteSpace($script:LastAnswer)) { Show-Notice 'No answer yet'; return }
     [System.Windows.Forms.Clipboard]::SetText($script:LastAnswer)
-    Set-Status 'Copied - paste with Ctrl+V'
+    Show-Notice 'Copied - paste with Ctrl+V'
 }
 
 # Ctrl+Alt+1..0: copy just Task N's section of the last answer.
 function Copy-TaskAnswer([int]$n) {
     if (-not (Test-DropHotkeyGate)) { return }
-    if ([string]::IsNullOrWhiteSpace($script:LastAnswer)) { Set-Status 'No answer yet'; return }
+    if ([string]::IsNullOrWhiteSpace($script:LastAnswer)) { Show-Notice 'No answer yet'; return }
     $s = Get-TaskSection $script:LastAnswer $n
-    if ($null -eq $s) { Set-Status "Task $n not found in answer"; return }
+    if ($null -eq $s) { Show-Notice "Task $n not found in answer"; return }
     [System.Windows.Forms.Clipboard]::SetText($s)
-    Set-Status "Task $n copied - paste with Ctrl+V"
+    Show-Notice "Task $n copied - paste with Ctrl+V"
 }
 
 # Hotkeys: id 1 = Ctrl+Alt+D (global), 2 = R (OOP run), 3 = C (copy-all,
 # Task 4), 4..13 = 1..9,0 (task copy, Task 4). Dispatch by WndProc-recorded id.
 $mods = (0x0001 -bor 0x0002 -bor 0x4000)   # Ctrl + Alt + no-repeat
-[void][DropNative]::RegisterHotKey($native.Handle, 1, $mods, 0x44)   # D
+# Registration can fail when another app owns a combo - collect instead of
+# discarding, and tell the user after the tray exists (never fail silently).
+$hotkeyFails = @()
+if (-not [DropNative]::RegisterHotKey($native.Handle, 1, $mods, 0x44)) { $hotkeyFails += 'Ctrl+Alt+D' }   # D
 $vkMap = [ordered]@{ 2 = 0x52; 3 = 0x43; 4 = 0x31; 5 = 0x32; 6 = 0x33; 7 = 0x34
                      8 = 0x35; 9 = 0x36; 10 = 0x37; 11 = 0x38; 12 = 0x39; 13 = 0x30 }
 foreach ($id in $vkMap.Keys) {
-    [void][DropNative]::RegisterHotKey($native.Handle, $id, $mods, $vkMap[$id])
+    if (-not [DropNative]::RegisterHotKey($native.Handle, $id, $mods, $vkMap[$id])) {
+        $hotkeyFails += ('Ctrl+Alt+' + [char]$vkMap[$id])
+    }
 }
 $native.add_HotKey({
     switch ($native.LastHotKeyId) {
@@ -853,6 +874,9 @@ $tray = New-Object System.Windows.Forms.NotifyIcon
 if ($form.Icon) { $tray.Icon = $form.Icon } else { $tray.Icon = [System.Drawing.SystemIcons]::Application }
 $tray.Text = 'Drop (Ctrl+Alt+D)'
 $tray.Visible = $true
+if ($hotkeyFails.Count -gt 0) {
+    Show-Notice ('Drop hotkeys already used by another app: ' + ($hotkeyFails -join ', ') + ' - those keys will not work')
+}
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 [void]$menu.Items.Add('Show / Hide', $null, { Toggle-Popup })
 [void]$menu.Items.Add('Copy last result', $null, { Copy-Again })
@@ -874,16 +898,20 @@ function Copy-Again {
 }
 
 function Start-Answer([string[]]$paths) {
-    if ($script:Running) { Set-Status 'Busy - wait for the current result'; return }
+    if ($script:Running) { Show-Notice 'Busy - wait for the current result'; return }
     $res = Collect-Input $paths
     $paper = $res[0]; $n = $res[1]
     if (($paper -split '\s+').Count -lt 15) {
-        if ($n -eq 0) { Set-Status 'No readable files (PDF needs pdftotext)' } else { Set-Status 'No readable text found' }
+        if ($n -eq 0) {
+            # Windows has no built-in PDF text extraction (macOS uses PDFKit):
+            # point at the one dependency instead of failing invisibly.
+            Show-Notice 'No readable files - PDF papers need pdftotext (install Poppler: winget install oschwartz10612.Poppler)'
+        } else { Show-Notice 'No readable text found' }
         return
     }
     if ($script:Provider -eq 'ollama' -and [string]::IsNullOrWhiteSpace($script:Model)) {
         # Never send a request for a model that does not exist.
-        Set-Status 'No Qwen model installed - ollama pull a Qwen model first'
+        Show-Notice 'No Qwen model installed - ollama pull a Qwen model first'
         return
     }
     $script:Paper = $paper
@@ -894,7 +922,7 @@ function Start-Answer([string[]]$paths) {
     $box.Text = ''
     $script:Running = $true
     Send-Prompt ($PromptHeader + "`n`n" + $paper)
-    Set-Status "Read $n file(s) - thinking..."
+    Show-Notice "Read $n file(s) - thinking..."
 }
 
 # ---- provider adapters (Phase 4/5) -------------------------------------------
@@ -1073,13 +1101,13 @@ $timer.Add_Tick({
         $box.Text = $answer
         [System.Windows.Forms.Clipboard]::SetText($answer)
         [System.Media.SystemSounds]::Asterisk.Play()
-        Set-Status 'Done! Copied - paste with Ctrl+V'
+        Show-Notice 'Done! Copied - paste with Ctrl+V'
     } catch {
         if ($script:Phase -eq 2 -and $script:Draft) {
             $script:Running = $false
             $script:LastAnswer = $script:Draft.Trim(); $box.Text = $script:LastAnswer
             [System.Windows.Forms.Clipboard]::SetText($script:LastAnswer)
-            Set-Status 'Check failed - draft copied (Ctrl+V)'
+            Show-Notice 'Check failed - draft copied (Ctrl+V)'
             return
         }
         # Phase 7A: classify the transport failure instead of one generic message.

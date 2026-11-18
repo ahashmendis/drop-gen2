@@ -52,6 +52,10 @@ and put the paper + starter project folders inside it.
 3. For **OpenCode Go**: tray icon → **Settings…** → paste API key →
    **Test Connection** → **Save**
 4. Switch providers with the **Ollama / OpenCode** button in the popup
+5. Exam papers as **PDF**? PDF text extraction on Windows needs the free
+   `pdftotext` tool — install Poppler once:
+   `winget install oschwartz10612.Poppler` (then reopen Drop). Other formats
+   (`.docx`, `.txt`, `.md`, code files) need nothing extra.
 
 ## Configuration
 
