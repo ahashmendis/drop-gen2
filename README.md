@@ -32,7 +32,10 @@ and put the paper + starter project folders inside it.
 2. Run `bash ~/Downloads/install-drop.sh`
 3. For **Ollama**: install Ollama and pull any Qwen model
    (e.g. `ollama pull qwen3-coder`) — Drop discovers every installed Qwen
-   model and offers it in the popup's model dropdown
+   model and offers it in the popup's model dropdown. The Ollama app starts
+   **only when you actually use it** (quiet laptop): never at login, and each
+   request sends `keep_alive: 0` so the model unloads when it finishes — the
+   server itself stays up and is never force-killed.
 4. For **OpenCode Go**: menu-bar tray icon → **Settings…** → paste your API key
    (`oc_…` from https://opencode.ai/auth) → **Test Connection** → **Save**
 5. Switch providers with the **🦙 Ollama / ☁️ OpenCode** button in the popup
@@ -42,7 +45,10 @@ and put the paper + starter project folders inside it.
 1. Open the `windows` folder and double-click `Install Drop.cmd`
 2. For **Ollama**: install Ollama for Windows and pull any Qwen model
    (e.g. `ollama pull qwen3-coder`) — the popup's dropdown lists every
-   installed Qwen model
+   installed Qwen model. The Ollama app starts **only when you actually use
+   it** (quiet laptop): never at login, and each request sends
+   `keep_alive: 0` so the model unloads when it finishes — the server itself
+   stays up and is never force-killed.
 3. For **OpenCode Go**: tray icon → **Settings…** → paste API key →
    **Test Connection** → **Save**
 4. Switch providers with the **Ollama / OpenCode** button in the popup
@@ -56,7 +62,7 @@ Stored locally, never in Keychain/Credential Manager, user-only permissions (060
 
 ```json
 {
-  "provider": "ollama",
+  "provider": "opencode_go",
   "ollama":      { "base_url": "http://127.0.0.1:11434", "default_model": "", "context": 0 },
   "opencode_go": { "base_url": "https://opencode.ai/zen/go/v1", "api_key": "", "model": "mimo-v2.6-flash" },
   "network":     { "connect_timeout": 20, "stream_idle_timeout": 120, "retry_attempts": 3, "retry_backoff": true },
@@ -73,11 +79,14 @@ Stored locally, never in Keychain/Credential Manager, user-only permissions (060
   uninstalled, Drop says so and falls back to an installed one — it never
   selects a model that does not exist. With no Qwen models installed the
   dropdown says `ollama pull a Qwen model first`.
-- `ollama.context` = manual `num_ctx` override, `0` (default) = hardware
-  preset: **8 GB → 8192 · 16 GB → 16384 · 32 GB → 16384 · 64 GB+ → 32768**
-  (conservative low end of each recommended range). Prompt-size growth still
-  raises the context for large papers, capped at 65536. Adjust it in
-  Settings → **Qwen ctx**.
+- `ollama.context` = manual `num_ctx` override, `0` (default) = automatic:
+  prompt-size growth floored at the hardware preset (**8 GB → 8192 ·
+  16 GB → 16384 · 32 GB+ → 32768**) and clamped to a conservative automatic
+  ceiling (**8 GB → 8192 · 16–32 GB → 16384 · 32 GB+ → 65536**). The prompt
+  is **never silently truncated**: if it needs more than the automatic
+  ceiling, the run stops and Drop points you at Settings → **Qwen ctx**
+  (raise it manually — larger contexts use more memory and can slow the
+  laptop). Manual values are respected up to the 65536 hard cap.
 - The API key is only ever sent to `base_url` — never logged, never shown in errors.
 - OpenCode requests match the verified baseline exactly: `User-Agent: Drop/1.0`,
   a stable `x-opencode-session` id (one per conversation; retries reuse it),

@@ -20,7 +20,7 @@ CONFIG="$DIR/config.json"
 if [ ! -f "$CONFIG" ]; then
   cat > "$CONFIG" <<'CFGEOF'
 {
-  "provider": "ollama",
+  "provider": "opencode_go",
   "ollama": {
     "base_url": "http://127.0.0.1:11434",
     "default_model": "",
@@ -140,7 +140,7 @@ let CONFIG_URL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/Drop/config.json")
 
 struct DropConfig {
-    var provider = "ollama"                 // "ollama" | "opencode_go"
+    var provider = "opencode_go"            // "ollama" | "opencode_go" (fresh installs only; saved configs win)
     var ollamaBase = "http://127.0.0.1:11434"
     // Last selected Ollama model (the dropdown only ever offers models that
     // are actually installed — never a hardcoded model name).
@@ -224,6 +224,30 @@ struct DropConfig {
         case 32..<64: return 16384  // 32 GB       → 16384–32768 (conservative low end)
         default:      return 32768  // 64 GB+      → 32768–65536 (conservative low end)
         }
+    }
+
+    // Automatic context ceiling (final policy): when no manual context is set,
+    // never allocate more than a conservative share of RAM. A manual
+    // `ollama.context` override is exempt (the 65536 hard cap still applies).
+    var ollamaContextCeiling: Int {
+        guard ollamaContext <= 0 else { return 65536 }
+        let gib = (ProcessInfo.processInfo.physicalMemory + 536_870_912) / 1_073_741_824
+        if gib < 16 { return 8192 }     // 8 GB class  → 8192
+        if gib < 32 { return 16384 }    // 16 GB       → 16384
+        return 65536                    // 32 GB+      → 65536
+    }
+
+    // Final automatic context for one request: prompt-size growth (capped at
+    // 65536), floored at the hardware-aware target, hard-capped at 65536, then
+    // clamped to the automatic ceiling. It never grows past the ceiling on its
+    // own — an oversized prompt is blocked (never truncated) with a pointer to
+    // the manual Qwen ctx setting.
+    func ollamaContextSize(forPrompt prompt: String) -> Int {
+        let needed = prompt.count / 3 + 8000
+        var ctx = 8192
+        while ctx < needed && ctx < 65536 { ctx *= 2 }
+        ctx = min(max(ctx, ollamaTargetContext), 65536)
+        return min(ctx, ollamaContextCeiling)
     }
 }
 
@@ -338,7 +362,7 @@ protocol ProviderAdapter {
     func listModels() async -> [String]?
 }
 
-// --- Ollama: existing behaviour moved verbatim (streaming, keep_alive, num_ctx) ---
+// --- Ollama: local generation (streaming, keep_alive 0, num_ctx via helper) ---
 struct OllamaProvider: ProviderAdapter {
     let config: DropConfig
     var id: String { "ollama" }
@@ -347,33 +371,43 @@ struct OllamaProvider: ProviderAdapter {
     func generate(prompt: String, model: String, label: String,
                   onChunk: @escaping (String) -> Void,
                   onStatus: @escaping (String) -> Void) async -> GenOutcome {
+        // On-demand start: probe first, open the Ollama app when it is not up
+        // (never a duplicate server; never killed afterwards).
+        guard await prepareOllama(startIfNeeded: true, base: config.ollamaBase,
+                                  timeout: config.connectTimeout, onStatus: { onStatus($0) }) else {
+            onStatus("⚠️ Ollama could not be started")
+            return .failed(DropError(kind: .tcpFailure))
+        }
         var req = URLRequest(url: URL(string: config.ollamaBase + "/api/generate")!)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 900
-        let needed = prompt.count / 3 + 8000
-        var ctx = 8192
-        while ctx < needed && ctx < 65536 { ctx *= 2 }
-        // Hardware-aware target (RAM preset or manual override) as a floor —
-        // prompt-size growth still wins when a large paper needs more, and the
-        // existing 65536 hard cap is unchanged.
-        ctx = min(max(ctx, config.ollamaTargetContext), 65536)
+        // Final context: growth + floor + hard cap + automatic ceiling. The
+        // oversized-prompt block lives in AppDelegate.generate; nothing here
+        // ever grows past the ceiling on its own.
+        let ctx = config.ollamaContextSize(forPrompt: prompt)
         let body: [String: Any] = ["model": model, "prompt": prompt, "stream": true,
-                                   "keep_alive": "30m", "options": ["num_ctx": ctx, "temperature": 0.2]]
+                                   "keep_alive": 0, "options": ["num_ctx": ctx, "temperature": 0.2]]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
         var answer = ""
         do {
             let (bytes, resp) = try await URLSession.shared.bytes(for: req)
             if let h = resp as? HTTPURLResponse, h.statusCode != 200 {
-                // Surface Ollama's own reason (e.g. "model 'x' not found").
+                // Surface Ollama's own reason (e.g. "model 'x' not found).
                 var raw = ""
                 for try await l in bytes.lines {
                     raw += l
                     if raw.count > 1024 { break }
                 }
+                var detail = errorDetail(from: raw)
+                // Context rejections: point at the manual Qwen ctx setting.
+                if raw.contains("context") || raw.contains("length") {
+                    let base = detail ?? ""
+                    detail = base.isEmpty ? "raise Qwen ctx in Settings" : base + " · " + "raise Qwen ctx in Settings"
+                }
                 return .failed(classifyHTTP(status: h.statusCode,
                                             retryAfterHeader: h.value(forHTTPHeaderField: "Retry-After"),
-                                            detail: errorDetail(from: raw)))
+                                            detail: detail))
             }
             for try await line in bytes.lines {
                 guard let d = line.data(using: .utf8),
@@ -409,19 +443,111 @@ struct OllamaProvider: ProviderAdapter {
         return false
     }
 
-    func listModels() async -> [String]? {
+    // Model list with metadata labels (name · size · quant) for the dropdown.
+    func listModelDetails() async -> [(name: String, label: String)]? {
         guard let url = URL(string: config.ollamaBase + "/api/tags") else { return nil }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let models = obj["models"] as? [[String: Any]] else { return nil }
-            let names = models
+            return models
                 .filter { !(($0["name"] as? String) ?? "").contains("cloud") }
                 .filter { OllamaProvider.isQwenFamily($0) }
-                .compactMap { $0["name"] as? String }
-                .sorted()
-            return names
+                .compactMap { m -> (name: String, label: String)? in
+                    guard let n = m["name"] as? String else { return nil }
+                    let d = m["details"] as? [String: Any]
+                    var label = n
+                    if let s = d?["parameter_size"] as? String, !s.isEmpty { label += " · " + s }
+                    if let q = d?["quantization_level"] as? String, !q.isEmpty { label += " · " + q }
+                    return (name: n, label: label)
+                }
+                .sorted { $0.name < $1.name }
         } catch { return nil }
+    }
+
+    func listModels() async -> [String]? {
+        // Names only: the protocol surface is unchanged; labels come from
+        // listModelDetails (OpenCode Go untouched).
+        await listModelDetails()?.map { $0.name }
+    }
+}
+
+// --- Ollama on-demand lifecycle (quiet laptop): start only when needed ---
+// We only ever manage a LOCAL Ollama install: if ollama.base_url points at a
+// remote host we neither start nor stop anything there.
+func ollamaManageable(_ base: String) -> Bool {
+    guard let host = URL(string: base)?.host else { return false }
+    return host == "127.0.0.1" || host == "localhost" || host == "::1"
+}
+
+// On-demand start: probe (GET /api/tags) first; when unreachable and asked to
+// start, open the official Ollama app and poll within the caller's timeout.
+// Env knobs are set on the start path only (best-effort; they apply to servers
+// launched afterwards). The server is NEVER killed — `keep_alive: 0` lets it
+// unload models between requests instead.
+func prepareOllama(startIfNeeded: Bool, base: String, timeout: TimeInterval, onStatus: ((String) -> Void)? = nil) async -> Bool {
+    guard ollamaManageable(base) else { return true }   // remote: not ours to manage
+    func reachable() async -> Bool {
+        guard let u = URL(string: base + "/api/tags") else { return false }
+        var r = URLRequest(url: u)
+        r.timeoutInterval = 5
+        do {
+            let (_, resp) = try await URLSession.shared.data(for: r)
+            return (resp as? HTTPURLResponse)?.statusCode == 200
+        } catch { return false }
+    }
+    if await reachable() {
+        demoteOllamaOnce()
+        return true
+    }
+    guard startIfNeeded else { return false }
+    onStatus?("Starting Ollama…")
+    for cmd in ["launchctl setenv OLLAMA_NUM_PARALLEL 1",
+                "launchctl setenv OLLAMA_MAX_LOADED_MODELS 1"] {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", cmd]
+        try? p.run(); p.waitUntilExit()
+    }
+    // Official app (open -a Ollama), never a bare `ollama serve` first.
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+    p.arguments = ["-a", "Ollama"]
+    do { try p.run(); p.waitUntilExit() } catch { return false }
+    try? await Task.sleep(nanoseconds: 300_000_000)
+    if await reachable() {
+        demoteOllamaOnce()
+        onStatus?("Ollama ready")
+        return true
+    }
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        if await reachable() {
+            demoteOllamaOnce()
+            onStatus?("Ollama ready")
+            return true
+        }
+    }
+    return false
+}
+
+// Best-effort one-time CPU demotion of a local Ollama server (secondary
+// optimization). Never fails the request; the flag is set only when renice ran.
+var ollamaDemoted = false
+func demoteOllamaOnce() {
+    guard !ollamaDemoted else { return }
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/sh")
+    p.arguments = ["-c", "pid=$(pgrep -x ollama || pgrep -x Ollama); if [ -n \"$pid\" ]; then renice 15 -p $pid >/dev/null 2>&1 && echo ok; fi"]
+    let out = Pipe()
+    p.standardOutput = out
+    p.standardError = FileHandle.nullDevice
+    do { try p.run() } catch { return }
+    let d = out.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    if String(data: d, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) == "ok" {
+        ollamaDemoted = true
     }
 }
 
@@ -877,7 +1003,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         config.save()   // re-asserts 0600
         testStatus.stringValue = "Saved (key stored locally, 0600)"
-        loadModels()
+        loadModels(startIfNeeded: true)
     }
 
     // Phase 6: Test Connection — real authenticated ping, key never displayed.
@@ -888,6 +1014,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             if cfg.provider == "ollama" {
                 let o = OllamaProvider(config: cfg)
+                guard await prepareOllama(startIfNeeded: true, base: cfg.ollamaBase,
+                                          timeout: cfg.connectTimeout) else {
+                    testStatus.stringValue = "❌ Ollama could not be started"
+                    return
+                }
                 if let names = await o.listModels(), !names.isEmpty {
                     testStatus.stringValue = "✅ Ollama OK – \(names.count) model(s)"
                 } else {
@@ -943,7 +1074,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Provider-aware discovery: Ollama hits localhost /api/tags; OpenCode Go hits
     // GET {base}/models with the stored key. No cross-talk: each path only talks
     // to its own endpoint (Phase 5: no localhost:11434 requests when OpenCode selected).
-    func loadModels() {
+    func loadModels(startIfNeeded: Bool = false) {
         let provider = activeProvider
         let cfg = config
         Task { @MainActor in
@@ -953,22 +1084,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 setStatus("⚠️ No OpenCode API key – open Settings (gear in tray)")
                 return
             }
-            let names = await provider.listModels()
+            // On-demand Ollama start — never while OpenCode is selected (the
+            // branch above returns first). Startup passes startIfNeeded:false
+            // (probe only).
+            if provider.id == "ollama" {
+                guard await prepareOllama(startIfNeeded: startIfNeeded, base: cfg.ollamaBase,
+                                          timeout: cfg.connectTimeout) else {
+                    modelPopup.removeAllItems()
+                    setStatus("⚠️ Ollama not running and could not be started")
+                    return
+                }
+            }
+            var names: [String]? = nil
             modelPopup.removeAllItems()
             // Ollama: only installed Qwen-family models (discovered from
-            // /api/tags — never a hardcoded name). OpenCode Go list handling
-            // unchanged.
+            // /api/tags — never a hardcoded name). The dropdown shows metadata
+            // labels (name · size · quant); the saved/sent value stays the
+            // plain model name. OpenCode Go list handling unchanged.
+            var labelMap: [String: String] = [:]
             let list: [String]
             if provider.id == "ollama" {
-                list = (names?.isEmpty == false) ? names! : []
+                let details = await OllamaProvider(config: cfg).listModelDetails()
+                for d in details ?? [] { labelMap[d.label] = d.name }
+                list = (details ?? []).map { $0.label }
+                names = details?.map { $0.name }
             } else {
+                names = await provider.listModels()
                 list = (names?.isEmpty == false) ? names! : [cfg.ocModel]
             }
+            self.modelLabelsToNames = labelMap
             modelPopup.addItems(withTitles: list)
             let savedKey = provider.id == "ollama" ? "model" : "oc_model"
             var missingSaved: String? = nil
-            if let saved = UserDefaults.standard.string(forKey: savedKey), list.contains(saved) {
-                modelPopup.selectItem(withTitle: saved)
+            if provider.id == "ollama", let saved = UserDefaults.standard.string(forKey: savedKey),
+               let idx = list.firstIndex(where: { self.resolvedModelName(from: $0) == saved }) {
+                modelPopup.selectItem(at: idx)
             } else if provider.id == "ollama" {
                 // Saved model no longer installed → never select a model that
                 // does not exist; fall back to an existing one (or leave the
@@ -994,13 +1144,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // Dropdown titles may be metadata labels ("name · size · quant"); the
+    // saved and sent model is always the plain name behind the label.
+    var modelLabelsToNames: [String: String] = [:]
+    func resolvedModelName(from title: String?) -> String? {
+        guard let t = title, !t.isEmpty else { return nil }
+        return modelLabelsToNames[t] ?? t
+    }
+
     @objc func modelChanged() {
         let key = config.provider == "ollama" ? "model" : "oc_model"
-        UserDefaults.standard.set(modelPopup.titleOfSelectedItem, forKey: key)
-        if config.provider == "opencode_go", let m = modelPopup.titleOfSelectedItem {
+        let name = resolvedModelName(from: modelPopup.titleOfSelectedItem)
+        UserDefaults.standard.set(name, forKey: key)
+        if config.provider == "opencode_go", let m = name {
             config.ocModel = m
             config.save()
-        } else if config.provider == "ollama", let m = modelPopup.titleOfSelectedItem {
+        } else if config.provider == "ollama", let m = name {
             // Mirror the selection into config (local file, same 0600 rules).
             config.ollamaDefaultModel = m
             config.save()
@@ -1019,7 +1178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if config.provider != "ollama" { modelPopup.addItem(withTitle: config.ocModel) }
         setStatus(config.provider == "ollama" ? "Ollama selected · local only"
                                               : "OpenCode Go selected · cloud")
-        loadModels()
+        loadModels(startIfNeeded: true)
     }
 
     @objc func chooseFiles() {
@@ -1103,7 +1262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.orderFrontRegardless()
             // Refresh the Qwen list when shown (newly installed / removed models
             // are picked up). Ollama-only: OpenCode Go never gets extra traffic.
-            if config.provider == "ollama" && !running { loadModels() }
+            if config.provider == "ollama" && !running { loadModels(startIfNeeded: true) }
         }
     }
 
@@ -1313,7 +1472,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // The popup only ever holds models that exist (Ollama: installed Qwen
         // models; OpenCode: configured model) — never send a nonexistent one.
-        guard let model = modelPopup.titleOfSelectedItem, !model.isEmpty else {
+        // Labels resolve back to the plain model name before sending.
+        guard let model = resolvedModelName(from: modelPopup.titleOfSelectedItem), !model.isEmpty else {
             setStatus(config.provider == "ollama"
                       ? "⚠️ No Qwen model installed – ollama pull a Qwen model first"
                       : "⚠️ No model selected")
@@ -1574,10 +1734,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func contextSize(for prompt: String) -> Int {
-        let needed = prompt.count / 3 + 8000
-        var ctx = 8192
-        while ctx < needed && ctx < 65536 { ctx *= 2 }
-        return ctx
+        config.ollamaContextSize(forPrompt: prompt)
     }
 
     // Single entry point for ALL providers (Phase 9: shared pipeline).
@@ -1585,6 +1742,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // compile-check + two repair rounds for free.
     @MainActor
     func generate(prompt: String, model: String, label: String) async -> String? {
+        // Final context policy: a prompt above the automatic ceiling is
+        // BLOCKED — never truncated. The user is told to raise the manual
+        // Qwen ctx setting (larger contexts pressure memory and slow the Mac).
+        if activeProvider.id == "ollama" && config.ollamaContext <= 0 {
+            let autoCtx = config.ollamaContextSize(forPrompt: prompt)
+            if prompt.count / 3 > autoCtx {
+                setStatus("⚠️ Prompt needs ~\(prompt.count / 3) tokens – above this Mac's automatic context ceiling (\(autoCtx)). Raise Qwen ctx in Settings (larger contexts use more memory and slow the laptop).")
+                return nil
+            }
+        }
         let provider = activeProvider
         lastPrompt = prompt
         lastModel = model
@@ -1633,6 +1800,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Phase 8: fallback only ever PROPOSED, requires explicit approval, off by default.
         guard config.allowFallback else { return nil }
         let ollama = OllamaProvider(config: config)
+        guard await prepareOllama(startIfNeeded: true, base: config.ollamaBase,
+                                  timeout: config.connectTimeout) else { return nil }
         guard let names = await ollama.listModels(), !names.isEmpty else { return nil }
         let a = NSAlert()
         a.messageText = "OpenCode Go unavailable"
@@ -1644,7 +1813,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             config.save()
             providerBtn.title = "🦙 Ollama"
             setStatus("Switched to Ollama (local) · retrying…")
-            loadModels()
+            loadModels(startIfNeeded: true)
             // Re-send the exact same request through the approved provider.
             // If Ollama also fails this returns nil (no fallback loop: the
             // provider guard above stops any second proposal).
@@ -1709,6 +1878,12 @@ cat > "$AGENT" <<EOF2
 EOF2
 launchctl bootout "gui/$(id -u)/local.drop" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$AGENT"
+
+# Quiet laptop: Ollama never auto-starts at login (best-effort; only its own
+# login job is touched — other startup items are left alone). Drop starts the
+# Ollama app on demand when Ollama is selected.
+launchctl bootout "gui/$(id -u)/com.ollama.ollama" 2>/dev/null || true
+launchctl disable "gui/$(id -u)/com.ollama.ollama" 2>/dev/null || true
 
 # Small launcher app (Spotlight: "Drop") - just asks launchd to (re)start the popup
 rm -rf "$APP"

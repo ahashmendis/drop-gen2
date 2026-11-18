@@ -5,6 +5,9 @@ echo Installing Drop to %D% ...
 if not exist "%D%" mkdir "%D%"
 copy /Y "%~dp0Drop.ps1" "%D%\Drop.ps1" >nul
 copy /Y "%~dp0Drop.ico" "%D%\Drop.ico" >nul
+rem Quiet laptop: drop Ollama's login auto-start (best-effort; only its own
+rem HKCU Run value - other startup entries are left alone).
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v Ollama /f >nul 2>&1
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Unblock-File -LiteralPath '%D%\Drop.ps1'; $s = New-Object -ComObject WScript.Shell; $l = $s.CreateShortcut([Environment]::GetFolderPath('Programs') + '\Drop.lnk'); $l.TargetPath = 'powershell.exe'; $l.Arguments = '-NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File \"%D%\Drop.ps1\"'; $l.IconLocation = '%D%\Drop.ico'; $l.WindowStyle = 7; $l.Save()"
 echo.
 echo Done. Starting Drop...

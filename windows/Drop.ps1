@@ -24,7 +24,7 @@ if (-not (Test-Path $ConfigDir)) { New-Item -ItemType Directory -Path $ConfigDir
 
 function Read-DropConfig {
     $defaults = @{
-        provider    = 'ollama'
+        provider    = 'opencode_go'
         ollama      = @{ base_url = $OllamaUrl; default_model = ''; context = 0 }
         opencode_go = @{ base_url = 'https://opencode.ai/zen/go/v1'; api_key = ''; model = 'mimo-v2.6-flash' }
         network     = @{ connect_timeout = 20; stream_idle_timeout = 120; retry_attempts = 3; retry_backoff = $true }
@@ -62,8 +62,7 @@ $OllamaUrl = $script:Config.ollama.base_url
 # Hardware-aware Ollama context target (conservative presets by system RAM;
 # a manual ollama.context > 0 wins). Mirrors the macOS implementation.
 $script:RamGB = $null
-function Get-OllamaContextTarget([int]$manual) {
-    if ($manual -gt 0) { return [Math]::Min($manual, 65536) }
+function Ensure-OllamaRamGB {
     if ($null -eq $script:RamGB) {
         $script:RamGB = 8
         try {
@@ -71,6 +70,10 @@ function Get-OllamaContextTarget([int]$manual) {
             $script:RamGB = [int](($b + 536870912) / 1GB)   # round to nearest GiB
         } catch { }
     }
+}
+function Get-OllamaContextTarget([int]$manual) {
+    if ($manual -gt 0) { return [Math]::Min($manual, 65536) }
+    Ensure-OllamaRamGB
     if ($script:RamGB -lt 16) { return 8192 }     # 8 GB class -> 8192
     if ($script:RamGB -lt 32) { return 16384 }    # 16 GB      -> 8192-16384
     if ($script:RamGB -lt 64) { return 16384 }    # 32 GB      -> 16384-32768 (conservative low)
@@ -79,6 +82,31 @@ function Get-OllamaContextTarget([int]$manual) {
 function Get-OllamaManualContext {
     if ($null -eq $script:Config.ollama.context) { return 0 }
     try { return [int]$script:Config.ollama.context } catch { return 0 }
+}
+# Automatic context ceiling (final policy): when no manual context is set,
+# never allocate more than a conservative share of RAM. A manual override is
+# exempt (the 65536 hard cap still applies).
+function Get-OllamaContextCeiling([int]$manual) {
+    if ($manual -gt 0) { return 65536 }
+    Ensure-OllamaRamGB
+    if ($script:RamGB -lt 16) { return 8192 }
+    if ($script:RamGB -lt 32) { return 16384 }
+    return 65536
+}
+# Final automatic context for one request: growth + floor + hard cap + ceiling
+# clamp. Never grows past the ceiling on its own - an oversized prompt is
+# blocked (never truncated) with a pointer to the manual Qwen ctx setting.
+function Get-OllamaFinalContext([string]$prompt) {
+    $manual = Get-OllamaManualContext
+    $need = [int]($prompt.Length / 3) + 8000
+    $ctx = 8192
+    while ($ctx -lt $need -and $ctx -lt 65536) { $ctx *= 2 }
+    $target = Get-OllamaContextTarget $manual
+    if ($ctx -lt $target) { $ctx = $target }
+    if ($ctx -gt 65536) { $ctx = 65536 }
+    $ceil = Get-OllamaContextCeiling $manual
+    if ($ctx -gt $ceil) { $ctx = $ceil }
+    return $ctx
 }
 
 $PromptHeader = @'
@@ -283,35 +311,127 @@ function Collect-Input([string[]]$paths) {
 $script:QwenModels    = @()
 $script:MissingSaved  = $null
 $script:ModelCombo    = $null
+# Model metadata for the dropdown: entries are @{Name=<plain name>; Label=<name · size · quant>}.
+# $script:QwenModels and $script:Model always hold plain names.
+$script:QwenModelDetails = @()
 
 function Sync-ModelCombo {
     $c = $script:ModelCombo
     if ($null -eq $c) { return }
     $c.Items.Clear()
-    foreach ($m in $script:QwenModels) { [void]$c.Items.Add($m) }
-    if ($script:Model -and ($script:QwenModels -contains $script:Model)) {
-        $c.SelectedItem = $script:Model
+    foreach ($d in $script:QwenModelDetails) { [void]$c.Items.Add($d.Label) }
+    if ($script:Model) {
+        $i = -1
+        for ($k = 0; $k -lt $script:QwenModelDetails.Count; $k++) {
+            if ($script:QwenModelDetails[$k].Name -eq $script:Model) { $i = $k; break }
+        }
+        if ($i -ge 0) { $c.SelectedIndex = $i }
+        elseif ($c.Items.Count -gt 0) { $c.SelectedIndex = 0 }
     } elseif ($c.Items.Count -gt 0) {
         $c.SelectedIndex = 0
     }
 }
 
-# Returns $true when Ollama is reachable. Never selects a model that does
-# not exist: the saved selection is used only if it is still installed.
-function Update-OllamaModels {
+# ---- Ollama on-demand lifecycle (quiet laptop): start only when needed -----
+# $true when the local Ollama API answers GET /api/tags within $TimeoutSec.
+function Test-OllamaApi([int]$TimeoutSec) {
     try {
+        $null = Invoke-RestMethod -Uri "$OllamaUrl/api/tags" -TimeoutSec $TimeoutSec
+        return $true
+    } catch { return $false }
+}
+
+# Resolve the official Ollama install (Start Menu shortcut first, then the
+# known install dirs). The bare CLI server ('serve') is a last resort only.
+function Start-OllamaApp {
+    $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'Ollama.lnk'
+    if (Test-Path -LiteralPath $lnk) {
+        try { Start-Process -FilePath $lnk; return $true } catch { }
+    }
+    foreach ($exe in @(
+        (Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama app.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Ollama\ollama app.exe'))) {
+        if (Test-Path -LiteralPath $exe) {
+            try { Start-Process -FilePath $exe; return $true } catch { }
+        }
+    }
+    $cli = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
+    if (-not (Test-Path -LiteralPath $cli)) {
+        $cmd = Get-Command ollama.exe -ErrorAction SilentlyContinue
+        if ($cmd) { $cli = $cmd.Source }
+    }
+    if (Test-Path -LiteralPath $cli) {
+        try { Start-Process -FilePath $cli -ArgumentList 'serve'; return $true } catch { }
+    }
+    return $false
+}
+
+# Best-effort one-time CPU demotion of the local Ollama server(s).
+# Flag set only when at least one process was actually demoted.
+$script:OllamaDemoted = $false
+function Set-OllamaLowPriority {
+    if ($script:OllamaDemoted) { return }
+    try {
+        $procs = @(Get-Process -Name 'ollama*' -ErrorAction SilentlyContinue)
+        foreach ($p in $procs) { try { $p.PriorityClass = 'BelowNormal' } catch { } }
+        if ($procs.Count -gt 0) { $script:OllamaDemoted = $true }
+    } catch { }
+}
+
+# On-demand start: probe first; when unreachable and asked to start, launch the
+# official Ollama app and poll within the connect-timeout budget. Env knobs are
+# set on the start path only (best-effort). The server is NEVER killed -
+# keep_alive 0 lets it unload models between requests instead.
+function Prepare-Ollama([bool]$StartIfNeeded) {
+    if ($OllamaUrl -notmatch '^http://(127\.0\.0\.1|localhost|\[::1\])') { return $true }  # remote: not ours to manage
+    if (Test-OllamaApi 1) {
+        Set-OllamaLowPriority
+        return $true
+    }
+    if (-not $StartIfNeeded) { return $false }
+    Set-Status 'Starting Ollama...'
+    $env:OLLAMA_NUM_PARALLEL = '1'
+    $env:OLLAMA_MAX_LOADED_MODELS = '1'
+    if (-not (Start-OllamaApp)) { return $false }
+    Start-Sleep -Milliseconds 300
+    $deadline = (Get-Date).AddSeconds([double]$script:Config.network.connect_timeout)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-OllamaApi 1) {
+            Set-OllamaLowPriority
+            Set-Status 'Ollama ready'
+            return $true
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+
+# Returns $true when Ollama is reachable (started first when asked). Never
+# selects a model that does not exist: the saved selection is used only if it
+# is still installed. The combo shows labels (name · size · quant);
+# $script:QwenModels / $script:Model always hold plain names.
+function Update-OllamaModels([bool]$StartIfNeeded = $false) {
+    if (-not (Prepare-Ollama -StartIfNeeded $StartIfNeeded)) { return $false }
+    try {
+        $script:QwenModelDetails = @()
         $tags = Invoke-RestMethod -Uri "$OllamaUrl/api/tags" -TimeoutSec 3
-        $script:QwenModels = @($tags.models | Where-Object {
-            $n = [string]$_.name
-            if ([string]::IsNullOrEmpty($n) -or $n -match 'cloud') { return $false }
+        foreach ($m in $tags.models) {
+            $n = [string]$m.name
+            if ([string]::IsNullOrEmpty($n) -or $n -match 'cloud') { continue }
             $fam = @()
-            if ($null -ne $_.details) {
-                if ($_.details.family)   { $fam += [string]$_.details.family }
-                if ($_.details.families) { $fam += @($_.details.families) }
+            if ($null -ne $m.details) {
+                if ($m.details.family)   { $fam += [string]$m.details.family }
+                if ($m.details.families) { $fam += @($m.details.families) }
             }
-            if (($fam -join ' ') -match 'qwen') { return $true }
-            return ($n -match 'qwen')
-        } | ForEach-Object { [string]$_.name } | Sort-Object)
+            if ((($fam -join ' ') -match 'qwen') -or ($n -match 'qwen')) {
+                $label = $n
+                if ($m.details.parameter_size)     { $label += ' · ' + [string]$m.details.parameter_size }
+                if ($m.details.quantization_level) { $label += ' · ' + [string]$m.details.quantization_level }
+                $script:QwenModelDetails += @{ Name = $n; Label = $label }
+            }
+        }
+        $script:QwenModelDetails = @($script:QwenModelDetails | Sort-Object { $_.Name })
+        $script:QwenModels = @($script:QwenModelDetails | ForEach-Object { [string]$_.Name })
         $script:OllamaOk = $true
         $script:MissingSaved = $null
         $saved = [string]$script:Config.ollama.default_model
@@ -329,6 +449,7 @@ function Update-OllamaModels {
         return $true
     } catch {
         $script:OllamaOk = $false
+        $script:QwenModelDetails = @()
         $script:QwenModels = @()
         $script:MissingSaved = $null
         $script:Model = ''
@@ -434,10 +555,13 @@ $cmbModel.Add_SelectedIndexChanged({
     if ($script:Provider -ne 'ollama') { return }
     $sel = [string]$script:ModelCombo.SelectedItem
     if ([string]::IsNullOrWhiteSpace($sel)) { return }
-    if ($script:Model -ne $sel) {
+    # The dropdown shows labels; the saved value is the plain model name.
+    $name = $sel
+    foreach ($d in $script:QwenModelDetails) { if ($d.Label -eq $sel) { $name = [string]$d.Name; break } }
+    if ($script:Model -ne $name) {
         # Remember the selected model locally (config file, user-only access).
-        $script:Model = $sel
-        $script:Config.ollama | Add-Member -NotePropertyName default_model -NotePropertyValue $sel -Force
+        $script:Model = $name
+        $script:Config.ollama | Add-Member -NotePropertyName default_model -NotePropertyValue $name -Force
         Write-DropConfig $script:Config
     }
 })
@@ -486,7 +610,7 @@ function Switch-Provider([string]$which) {
         # Phase 5: no localhost:11434 traffic while OpenCode is selected
         Set-Status $(if ($script:CloudOk) { 'OpenCode Go selected - cloud' } else { 'No OpenCode API key - open Settings (tray)' })
     } else {
-        if (Update-OllamaModels) {
+        if (Update-OllamaModels $true) {
             if ($script:QwenModels.Count -eq 0) {
                 Set-Status 'No Qwen models installed - ollama pull a Qwen model first'
             } elseif ($script:MissingSaved) {
@@ -588,6 +712,7 @@ function Show-DropSettings {
             }
         } else {
             try {
+                if (-not (Prepare-Ollama -StartIfNeeded $true)) { $lblS.Text = 'Ollama could not be started'; return }
                 $null = Invoke-RestMethod -Uri "$b/api/tags" -TimeoutSec 5
                 $lblS.Text = 'OK - Ollama reachable'
             } catch { $lblS.Text = 'Ollama not reachable at that URL' }
@@ -634,7 +759,7 @@ function Toggle-Popup {
         # Refresh the Qwen list when shown (newly installed / removed models are
         # picked up). Ollama-only: OpenCode Go never gets extra traffic here.
         if ($script:Provider -eq 'ollama' -and -not $script:Running) {
-            [void](Update-OllamaModels)
+            [void](Update-OllamaModels $true)
             Set-OllamaStatus
         }
     }
@@ -838,16 +963,21 @@ function Send-Prompt([string]$prompt) {
         $script:Task = $client.SendAsync($req)
         return
     }
-    # Ollama path (stream:false, keep_alive, num_ctx). Prompt-size sizing as
-    # before, with the hardware-aware target (RAM preset or manual override)
-    # applied as a floor; the existing 65536 hard cap is unchanged.
-    $need = [int]($prompt.Length / 3) + 8000
-    $ctx = 8192
-    while ($ctx -lt $need -and $ctx -lt 65536) { $ctx *= 2 }
-    $target = Get-OllamaContextTarget (Get-OllamaManualContext)
-    if ($ctx -lt $target) { $ctx = $target }
-    if ($ctx -gt 65536) { $ctx = 65536 }
-    $body = @{ model = $script:Model; prompt = $prompt; stream = $false; keep_alive = '30m'; options = @{ num_ctx = $ctx; temperature = 0.2 } } | ConvertTo-Json -Depth 5 -Compress
+    # Ollama path (stream:false, keep_alive 0, num_ctx). Final context =
+    # growth + floor + hard cap + automatic ceiling. On the automatic path an
+    # oversized prompt is blocked (never truncated) and pointed at Settings.
+    $ctx = Get-OllamaFinalContext $prompt
+    if ((Get-OllamaManualContext) -le 0 -and [int]($prompt.Length / 3) -gt $ctx) {
+        Set-Status "Prompt too large for automatic context ceiling ($ctx tokens) - raise Qwen ctx in Settings (large contexts use more memory)"
+        $script:Running = $false
+        return
+    }
+    if (-not (Prepare-Ollama -StartIfNeeded $true)) {
+        Set-Status 'Ollama not running and could not be started'
+        $script:Running = $false
+        return
+    }
+    $body = @{ model = $script:Model; prompt = $prompt; stream = $false; keep_alive = 0; options = @{ num_ctx = $ctx; temperature = 0.2 } } | ConvertTo-Json -Depth 5 -Compress
     $content = New-Object System.Net.Http.StringContent($body, [System.Text.Encoding]::UTF8, 'application/json')
     $script:Task = $client.PostAsync("$OllamaUrl/api/generate", $content)
 }
@@ -886,6 +1016,10 @@ $timer.Add_Tick({
             }
             # Phase 7F: endpoint unreachable on this network? Offer Ollama only with approval.
             $msg = $kind
+            # Ollama context rejections: point at the manual Qwen ctx setting.
+            if ($script:Provider -eq 'ollama' -and $text -match 'context') {
+                $msg += ' - raise Qwen ctx in Settings'
+            }
             if ($script:Provider -eq 'opencode_go' -and ($status -in 408,429 -or $status -ge 500 -or $kind -match 'unreachable|timeout')) {
                 if ($script:Config.preferences.allow_fallback) {
                     $r = [System.Windows.Forms.MessageBox]::Show(
