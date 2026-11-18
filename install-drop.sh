@@ -1115,7 +1115,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if front.bundleIdentifier == "com.jetbrains.intellij" { return true }
             if (front.localizedName ?? "").contains("IntelliJ") { return true }
         }
-        return NSApp.isActive   // Drop itself frontmost → allow (test copies from popup)
+        // Drop itself: the panel is .nonactivatingPanel (shown with
+        // orderFrontRegardless), so it can be key while NSApp.isActive is
+        // false and frontmostApplication still names the other app — check
+        // key-window too, or ⌃⌥C/1-0 are ignored while the popup is key.
+        if NSApp.isActive { return true }
+        return NSApp.windows.contains(where: { $0.isKeyWindow })
     }
 
     // ⌃⌥R: read Desktop/OOP and start the run — headless, never opens the

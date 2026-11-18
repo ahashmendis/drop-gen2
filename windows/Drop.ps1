@@ -179,7 +179,7 @@ public class DropNative : NativeWindow {
         try {
             var p = System.Diagnostics.Process.GetProcessById(pid);
             var n = p.ProcessName.ToLowerInvariant();
-            return n == "idea64" || n == "idea" || p.MainWindowTitle.Contains("IntelliJ");
+            return n == "idea64" || n == "idea";   // process name only - no title match (fails closed)
         } catch { return false; }
     }
     protected override void WndProc(ref Message m) {
@@ -661,19 +661,25 @@ function Start-OopRun {
 }
 
 # Slice "…===== Task N ===== …" up to (excluding) the next Task header.
-# StartsWith("===== Task $n =====") pins the trailing header text, so Task 1
-# can never match a Task 10 line. Returns $null when the task is absent.
+# The model emits headers as "// ===== Task N =====" (per $PromptHeader), so
+# each line is TrimStart'ed and an optional leading '//' stripped BEFORE the
+# comparison. StartsWith("===== Task $n =====") pins the trailing header text,
+# so Task 1 can never match a Task 10 line. Returns $null when absent.
 function Get-TaskSection([string]$answer, [int]$n) {
     $lines = $answer -split "`r?`n"
     $header = "===== Task $n ====="
     $start = -1
     for ($i = 0; $i -lt $lines.Count; $i++) {
-        if ($lines[$i].TrimStart().StartsWith($header)) { $start = $i; break }
+        $t = $lines[$i].TrimStart()
+        if ($t.StartsWith('//')) { $t = $t.Substring(2).TrimStart() }
+        if ($t.StartsWith($header)) { $start = $i; break }
     }
     if ($start -lt 0) { return $null }
     $end = $lines.Count
     for ($i = $start + 1; $i -lt $lines.Count; $i++) {
-        if ($lines[$i].TrimStart().StartsWith("===== Task ")) { $end = $i; break }
+        $t = $lines[$i].TrimStart()
+        if ($t.StartsWith('//')) { $t = $t.Substring(2).TrimStart() }
+        if ($t.StartsWith("===== Task ")) { $end = $i; break }
     }
     $slice = ($lines[$start..($end - 1)] -join "`r`n").Trim()
     if ([string]::IsNullOrWhiteSpace($slice)) { return $null }
