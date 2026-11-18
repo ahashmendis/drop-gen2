@@ -660,6 +660,44 @@ function Start-OopRun {
     Start-Answer @($oop)   # headless: never calls Toggle-Popup
 }
 
+# Slice "…===== Task N ===== …" up to (excluding) the next Task header.
+# StartsWith("===== Task $n =====") pins the trailing header text, so Task 1
+# can never match a Task 10 line. Returns $null when the task is absent.
+function Get-TaskSection([string]$answer, [int]$n) {
+    $lines = $answer -split "`r?`n"
+    $header = "===== Task $n ====="
+    $start = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i].TrimStart().StartsWith($header)) { $start = $i; break }
+    }
+    if ($start -lt 0) { return $null }
+    $end = $lines.Count
+    for ($i = $start + 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i].TrimStart().StartsWith("===== Task ")) { $end = $i; break }
+    }
+    $slice = ($lines[$start..($end - 1)] -join "`r`n").Trim()
+    if ([string]::IsNullOrWhiteSpace($slice)) { return $null }
+    return $slice
+}
+
+# Ctrl+Alt+C: copy the full last answer (same path as the Copy button).
+function Copy-AllAnswer {
+    if (-not (Test-DropHotkeyGate)) { return }
+    if ([string]::IsNullOrWhiteSpace($script:LastAnswer)) { Set-Status 'No answer yet'; return }
+    [System.Windows.Forms.Clipboard]::SetText($script:LastAnswer)
+    Set-Status 'Copied - paste with Ctrl+V'
+}
+
+# Ctrl+Alt+1..0: copy just Task N's section of the last answer.
+function Copy-TaskAnswer([int]$n) {
+    if (-not (Test-DropHotkeyGate)) { return }
+    if ([string]::IsNullOrWhiteSpace($script:LastAnswer)) { Set-Status 'No answer yet'; return }
+    $s = Get-TaskSection $script:LastAnswer $n
+    if ($null -eq $s) { Set-Status "Task $n not found in answer"; return }
+    [System.Windows.Forms.Clipboard]::SetText($s)
+    Set-Status "Task $n copied - paste with Ctrl+V"
+}
+
 # Hotkeys: id 1 = Ctrl+Alt+D (global), 2 = R (OOP run), 3 = C (copy-all,
 # Task 4), 4..13 = 1..9,0 (task copy, Task 4). Dispatch by WndProc-recorded id.
 $mods = (0x0001 -bor 0x0002 -bor 0x4000)   # Ctrl + Alt + no-repeat
@@ -673,7 +711,8 @@ $native.add_HotKey({
     switch ($native.LastHotKeyId) {
         1 { Toggle-Popup }
         2 { Start-OopRun }
-        # ids 3 and 4..13 added in Task 4
+        3 { Copy-AllAnswer }
+        { $_ -ge 4 -and $_ -le 13 } { Copy-TaskAnswer ($_ - 3) }
         default { }
     }
 })
