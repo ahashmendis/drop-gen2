@@ -13,6 +13,19 @@ prompt, Java compile-check (macOS), repair-loop and clipboard pipeline:
 | Needs internet | No | Yes |
 | Discovery | `GET /api/tags`, Qwen family only | `GET /models` (falls back to configured model) |
 
+## Hotkeys (IntelliJ workflow)
+
+| Action | macOS | Windows |
+|---|---|---|
+| Read `Desktop/OOP` + start AI run (headless — open the popup manually to watch) | ⌃⌥R | Ctrl+Alt+R |
+| Copy full answer | ⌃⌥C | Ctrl+Alt+C |
+| Copy Task 1…9 / Task 10 | ⌃⌥1…9 / ⌃⌥0 | Ctrl+Alt1…9 / Ctrl+Alt0 |
+| Show / hide popup | ⌃⌥D | Ctrl+Alt+D |
+
+The four new hotkeys act only while IntelliJ IDEA (or Drop itself) is
+frontmost — presses are ignored in other apps. Create `Desktop/OOP` by hand
+and put the paper + starter project folders inside it.
+
 ## Mac
 
 1. Put `install-drop.sh` and `Drop.icns` in `~/Downloads`
