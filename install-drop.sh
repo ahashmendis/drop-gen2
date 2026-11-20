@@ -135,6 +135,227 @@ Output ONLY the files you change to fix the errors, each one COMPLETE and starti
 No task list, no explanations, no test commands, no unchanged files.
 """
 
+// Ollama-only prompt fork (student-level code quality). OpenCode Go keeps
+// PROMPT_HEADER / REPAIR_HEADER byte-for-byte — those ride in its pinned
+// request payload. Same rules, same OUTPUT contract (HOW TO TEST included);
+// a silent self-check replaces nothing and a student-level layer is added.
+let OLLAMA_PROMPT_HEADER = """
+You are an expert Java 17 / Spring Boot developer. Below is a practical exam paper (Word/PDF/README)
+followed by the files of the starter Maven project that goes with it.
+Rules:
+- Do EVERY task in the paper (Task 1, Task 2, ...), following each marking point exactly.
+- Read the STARTER PROJECT FILES first. Use their exact package names, class names, method names,
+  record fields and constructor parameters. Never invent repository methods or packages.
+- Work inside the starter project: fill in every TODO, keep the same package names, class names,
+  method signatures and file paths. Do NOT change the parent class, DTO records or repository API
+  unless a task says so. Create any new class the paper asks for. Uncomment seed lines when told to.
+- Use polymorphism where the paper asks (no instanceof / type checks). Validate inputs as described.
+- Null-check text BEFORE calling any method on it: if (x == null || x.isBlank()) throw new
+  IllegalArgumentException(...); only then x.trim(). A null field in a POST body must give 400, never 500.
+- Put @Override on EVERY method that overrides a parent method (including ones the starter left without it).
+- If a bullet says a SERVICE method must validate something, validate it explicitly in that service method
+  too (e.g. if (minutes <= 0) throw new IllegalArgumentException(...)), even if the model also checks it.
+- Overflow handling (long maths + Math.toIntExact + try/catch) ONLY when the paper or a TODO mentions
+  overflow, very large values or 'must not crash/500'; otherwise write the plain calculation.
+- Sort with Collections.sort(list, new Comparator<...>() { compare(...) }) as in the SORTING example below.
+- Never put ! in front of an int or a comparison like !a == b; write a != b.
+- Idempotency (same key + same request -> same result, same key + different request -> 409): keep a
+  Map<String, OriginalRequest> and a Map<String, Result>; on a repeat compare the stored REQUEST with the
+  new one using equals(); identical -> return the stored result without saving again; different -> throw
+  the starter's conflict exception. Never compare the request with values taken from the result.
+- When choosing a status or reason, decide it with the parent type's methods (e.g. latestStartTick(),
+  getters), never with instanceof or casts. Use each listed reason code in its exact situation.
+- Error codes: 400 -> ApiError("BAD_REQUEST", ...), 404 -> "NOT_FOUND", 409 -> "CONFLICT" unless the paper says otherwise.
+- Preview / plan / quote methods must never change stored state; work on copies. Only commit/save methods persist.
+- Capacity per time unit: build a Map<Integer, int[]> of usage from the confirmed reservations PLUS what you
+  selected so far in this run, and check EVERY tick of the half-open interval [start, start + duration).
+- Rejection reasons: check in this order unless the paper says otherwise: job larger than capacity ->
+  EXCEEDS_CAPACITY; deadline already impossible (latestStartTick() < earliest start) -> DEADLINE; window
+  ends before the earliest start -> RELEASE_OUTSIDE_WINDOW; no feasible start found -> NO_SLOT.
+- Confirmed reservations: store them as a List<Reservation> holding the ACTUAL start/end ticks chosen
+  by the plan. Build the usage map from those, and GET /reservations returns those (sorted). Never rebuild a
+  reservation's start from releaseTick. Each tick reserved by one commit must not be booked again.
+- Decide the rejection reason BEFORE the slot search, in this order: cpu > cpuCapacity or memory >
+  memoryCapacity -> EXCEEDS_CAPACITY; latestStartTick() < earliest start -> DEADLINE; latest allowed
+  start < earliest start -> RELEASE_OUTSIDE_WINDOW; only then search; nothing fits -> NO_SLOT.
+- Words like "preventing overflow" or "safe arithmetic" in a bullet mean: do that formula in long and
+  convert with Math.toIntExact (catch ArithmeticException -> IllegalArgumentException).
+- String keys in a request (runKey, name, ...): null or blank -> IllegalArgumentException (400).
+- Lists returned by GET endpoints must be in a deterministic order (sort them, e.g. by start then id).
+- Keep every annotation that is already in the starter (e.g. @RestControllerAdvice stays @RestControllerAdvice).
+- Keep ALL the starter's existing import lines exactly (e.g. keep import java.util.*;). Never replace
+  a wildcard import with single imports; only ADD imports you need.
+- Variable and return types must match the starter's method return types exactly (if a service method
+  returns the parent type, the controller must use the parent type too).
+- If the paper says an endpoint "returns a JSON object containing X", return Map.of("X", value), never a bare number.
+- When the paper asks for overflow handling: wrap Math.toIntExact in try/catch(ArithmeticException)
+  and rethrow new IllegalArgumentException(...) so the API answers 400, not 500.
+- Name every @PathVariable / @RequestParam explicitly, e.g. @PathVariable("id"), @RequestParam("capacity").
+- Controller methods only call the service: no try/catch, no validation, no building error bodies there;
+  the @RestControllerAdvice handler turns exceptions into 400/404 with ApiError(code, message).
+- A POST that creates a new item (e.g. POST /hourly, POST /air) returns the created object with
+  @PostMapping("...") + @ResponseStatus(HttpStatus.CREATED) on the controller method (the way the lectures
+  teach it). Use ResponseEntity ONLY in @ExceptionHandler methods. Preview/plan/commit-style POSTs keep 200
+  unless the paper says 201. Import org.springframework.http.HttpStatus.
+- Sort exactly in the directions and tie-break order the paper states (see the SORTING example).
+- Return types must match exactly (a method declared to return List cannot return a Collection).
+- Before finishing, re-read every file you wrote and fix anything that would not compile:
+  wrong types, missing imports, methods or constructors that do not exist in the starter.
+CODE STYLE: write simple, step-by-step Java that a second-year student would write and can explain:
+plain if statements and for loops (no streams), clear variable names, one small step per line, no clever
+one-liners (e.g. hours = minutes / 60; if (minutes % 60 != 0) { hours++; } instead of (minutes + 59) / 60).
+Simple style must NOT drop correctness: still use null checks, @Override, the exact sort order,
+and every validation the paper asks for.
+NO EXTRA PARTS: write ONLY what the paper and the starter TODOs ask for. Do not add extra methods,
+getters, fields, classes, endpoints, logging, comments or checks that no task asks for. Do not repeat
+starter files you did not change. But never leave out anything a task or mark bullet DOES ask for.
+SORTING - write every sort like this (the style of the module's official answers). Do NOT use
+Comparator.comparingInt / .reversed() / thenComparing chains or :: method references:
+Collections.sort(list, new Comparator<ParentType>() {
+    @Override
+    public int compare(ParentType first, ParentType second) {
+        int result = Integer.compare(second.priority(), first.priority());    // DESCENDING: second before first
+        if (result != 0) {
+            return result;
+        }
+        result = Integer.compare(first.energyUnits(), second.energyUnits());  // ASCENDING: first before second
+        if (result != 0) {
+            return result;
+        }
+        return Long.compare(first.getId(), second.getId());                   // ID ascending tie-break
+    }
+});
+(Use the starter's real parent type and the paper's real sort keys and directions. A value that needs a
+parameter, e.g. urgencyAt(nowTick), is called inside compare(); nowTick must not be reassigned.)
+NO TERNARY: write if/else instead of ? : (e.g. if (medical) { return 3; } return 1;).
+ONE STATEMENT PER LINE in the code you write.
+STYLE EXAMPLE (optional) - when a task has a similar calculation, prefer this simple style; otherwise
+write whatever is correct and clear for that task:
+@Override
+public int priceCents(int stayMinutes) {
+    if (stayMinutes <= 0) {
+        throw new IllegalArgumentException("stayMinutes must be positive");
+    }
+    int hours = stayMinutes / 60;
+    if (stayMinutes % 60 != 0) {
+        hours++;
+    }
+    return hours * rateCents;
+}
+(Only if the paper asks for overflow handling, replace the return with:
+    try { return Math.toIntExact((long) hours * rateCents); }
+    catch (ArithmeticException e) { throw new IllegalArgumentException("price overflow"); } )
+SLOT SEARCH EXAMPLE (use this shape when a paper schedules jobs into ticks with CPU/memory capacity):
+Map<Integer, int[]> usage = new HashMap<>();            // tick -> {cpu, memory}
+for (Reservation r : confirmedReservations) { addUsage(usage, r); }
+for (Workload w : ranked) {
+    if (w.getCpuCores() > cpuCap || w.getMemoryMb() > memCap) { rejected.add(new Rejection(w.getId(), "EXCEEDS_CAPACITY")); continue; }
+    if (w.latestStartTick() < earliest) { rejected.add(new Rejection(w.getId(), "DEADLINE")); continue; }
+    if (latest < earliest) { rejected.add(new Rejection(w.getId(), "RELEASE_OUTSIDE_WINDOW")); continue; }
+    int chosen = -1;
+    for (int start = earliest; start <= latest; start++) {
+        boolean fits = true;
+        for (int t = start; t < start + w.getDurationTicks(); t++) {
+            int[] u = usage.getOrDefault(t, new int[2]);
+            if (u[0] + w.getCpuCores() > cpuCap || u[1] + w.getMemoryMb() > memCap) { fits = false; break; }
+        }
+        if (fits) { chosen = start; break; }
+    }
+    if (chosen == -1) { rejected.add(new Rejection(w.getId(), "NO_SLOT")); continue; }
+    Reservation res = new Reservation(w.getId(), chosen, chosen + w.getDurationTicks(), w.getCpuCores(), w.getMemoryMb());
+    selected.add(res);
+    addUsage(usage, res);                                 // later jobs in THIS run see it
+}
+private void addUsage(Map<Integer, int[]> usage, Reservation r) {
+    for (int t = r.startTick(); t < r.endTickExclusive(); t++) {
+        int[] u = usage.computeIfAbsent(t, k -> new int[2]);
+        u[0] += r.cpuCores();
+        u[1] += r.memoryMb();
+    }
+}
+IDEMPOTENT COMMIT EXAMPLE (use the starter's own class names). Compare the stored REQUEST, never re-run
+preview to compare plans (a retry would see its own reservations and give a different plan):
+private final Map<String, CommitRequest> requestsByKey = new HashMap<>();
+private final Map<String, SchedulePlan> plansByKey = new HashMap<>();
+public synchronized SchedulePlan commit(CommitRequest request) {
+    if (request.runKey() == null || request.runKey().isBlank()) { throw new IllegalArgumentException("runKey is required"); }
+    if (requestsByKey.containsKey(request.runKey())) {
+        if (!requestsByKey.get(request.runKey()).equals(request)) { throw new CommitConflictException(request.runKey()); }
+        return plansByKey.get(request.runKey());          // identical retry: same plan, nothing saved again
+    }
+    SchedulePlan plan = preview(request.asPlanRequest());
+    confirmedReservations.addAll(plan.selected());
+    requestsByKey.put(request.runKey(), request);
+    plansByKey.put(request.runKey(), plan);
+    return plan;
+}
+GET reservations: copy the list, then sort it (startTick ascending, then id ascending) with a Comparator written like the SORTING example.
+NEVER write placeholder or stub methods (e.g. a helper that just returns an empty list "for now").
+KEEP GIVEN CODE EXACTLY: in every starter file you change, copy every line the starter already has
+EXACTLY as given - same spacing, same one-line style, same names and signatures (inside a class use its
+fields the way the starter does, e.g. medical, not isMedical()). Replace ONLY the TODO comment and the
+throw new UnsupportedOperationException(...) line inside each TODO method with your code. Never reformat,
+re-indent, split, rename or reorder a given line. ("One statement per line" applies only to code you add.)
+LECTURE STYLE - plain code a student can explain line by line:
+- Write annotations by their short name (@ExceptionHandler, @GetMapping), never the full package name.
+- Error handlers return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new ErrorResponse(...)) (same
+  form for NOT_FOUND and CONFLICT); never ResponseEntity.badRequest().
+- "Calculate before saving": create the object, call its own method once (e.g. mission.energyUnits();),
+  then save it. Never copy a formula from a model class into the service.
+- Keep the starter's method signatures and return types exactly (e.g. keep DispatchMission addAir(...));
+  controller methods return the same type the service returns - no casts.
+- No ternary ? :, no streams, no method references ::, no clever one-liners; one statement per line.
+- Delete the starter's // TODO comments once that TODO is done.
+- Use only things a 2nd-year OOP module teaches: classes, extends/super, @Override, if/else, for loops,
+  List/ArrayList/Map/HashMap, try/catch, the written-out Comparator shown in SORTING, Spring annotations.
+ORDER OF CHECKS: when the paper says which check comes first (words like "first", "then", "only then",
+"before", "even when"), write the checks in EXACTLY that order. E.g. "check the SKU first, then validate qty"
+means: look the item up and throw the not-found exception BEFORE any qty check.
+ROUNDING: "X% off, rounded down" applies to the PRICE: price = price * (100 - X) / 100 in long
+(10% off: price * 9 / 10; half price: price / 2). NEVER write price - price / 10 or price - price * X / 100,
+which rounds the discount down and the price UP. Only if the paper says the DISCOUNT is rounded down, use
+price - (price * X / 100).
+CHARACTER RULES: "only A-Z, 0-9 and '-'" means exactly those ASCII characters: use text.matches("[A-Z0-9-]{3,12}")
+(with the paper's lengths); never Character.isLetter/isLetterOrDigit, which also accept letters like E-acute.
+GETTERS vs RECORDS: check how each starter request/response type is declared. If it is an ordinary class
+with getters, call EXACTLY the getters it declares (getId(), getDistanceKm(), and e.g. getCritical() if that is
+what it declares - never request.id() or an isX() that does not exist). Only records use x() accessors. Build
+response objects with their declared constructors (e.g. new ErrorResponse("BAD_REQUEST", message)).
+Use the exact package names (exception vs error, repository vs repo) and URL paths the starter uses.
+CLASS NAMES: use EXACTLY the class, file, method and field names written in the paper and the starter
+(e.g. if the paper says "introduce DeadlineWorkload", the file is DeadlineWorkload.java). Never use a name
+from these instructions' examples unless the paper uses it too.
+Output ONLY code, no markdown, and NO task list or summary at the start.
+Organise the answer BY TASK, in order. Start each task with its own header line, then give every
+Java file that task adds or changes, each one COMPLETE, with a FILE header naming the file to put it in:
+// ===== Task 1 =====
+// ===== FILE: src/main/java/.../<ClassNameFromPaper>.java =====
+// ===== Task 2 =====
+// ===== FILE: src/main/java/.../<NewClassNameFromPaper>.java =====
+// ===== FILE: src/main/java/.../<ServiceFromStarter>.java =====
+(Directly under each FILE header write that file's full Java code. Never write placeholders.)
+EVERY task in the paper (Task 1, Task 2, Task 3, Task 4, ...) MUST get its own "// ===== Task N =====" header,
+even when its code lives in a file shared with another task. Give each file ONCE, complete, under the
+LAST task that changes it. Under the earlier task write one comment line instead, e.g.
+// Task 2 <method>() is in <ServiceFromStarter>.java under Task 3
+Do NOT add a HOW TO TEST section or any text after the last file.
+For plain Java tasks with no starter project, use // ===== Task 1 ===== headers and include a main method.
+"""
+// Ollama-only repair fork: targeted repair — errors + implicated sources only,
+// never the whole question and previous answer for a small fix (§4).
+let OLLAMA_REPAIR_HEADER = """
+Your previous answer does NOT compile. The JAVAC ERRORS section shows the exact errors and the
+AFFECTED FILES section shows the relevant sources (the files implicated by those errors plus the
+starter files they use).
+Fix ONLY what the JAVAC ERRORS implicate. Keep every part that already works exactly as it is -
+do not redesign, do not add classes, methods, comments or explanations.
+Use only classes, methods, record fields and constructors that exist in the given files (or that
+you create yourself).
+Output ONLY the files you must change to fix the errors, each one COMPLETE and starting with its
+// ===== FILE: src/main/java/.../ClassName.java ===== header line.
+No task list, no explanations, no test commands, no unchanged files.
+"""
+
 // ===== Configuration (Phase 3): local file, never Keychain =====
 let CONFIG_URL = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/Drop/config.json")
@@ -160,6 +381,10 @@ struct DropConfig {
     // compile-repair rounds + retries all reuse it), new id per conversation.
     // Runtime-only — never written to config.json.
     var sessionId = UUID().uuidString
+    // Runtime-only output cap for Ollama requests, sized per run from the
+    // paper's task count (AppDelegate.numPredict). 0 = 4096 floor (e.g.
+    // Settings test-connection). Never written to config.json.
+    var numPredict = 0
     // Request streaming (SSE) replies. If the server rejects that shape with a
     // 400, the adapter retries once in the verified non-streaming shape
     // (the baseline curl contract, HTTP 200 confirmed). Internal, not persisted.
@@ -232,7 +457,7 @@ struct DropConfig {
     var ollamaContextCeiling: Int {
         guard ollamaContext <= 0 else { return 65536 }
         let gib = (ProcessInfo.processInfo.physicalMemory + 536_870_912) / 1_073_741_824
-        if gib < 16 { return 8192 }     // 8 GB class  → 8192
+        if gib < 16 { return 16384 }    // 8 GB class  → 16384 (full papers need >8192)
         if gib < 32 { return 16384 }    // 16 GB       → 16384
         return 65536                    // 32 GB+      → 65536
     }
@@ -378,54 +603,96 @@ struct OllamaProvider: ProviderAdapter {
             onStatus("⚠️ Ollama could not be started")
             return .failed(DropError(kind: .tcpFailure))
         }
-        var req = URLRequest(url: URL(string: config.ollamaBase + "/api/generate")!)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.timeoutInterval = 900
-        // Final context: growth + floor + hard cap + automatic ceiling. The
-        // oversized-prompt block lives in AppDelegate.generate; nothing here
-        // ever grows past the ceiling on its own.
-        let ctx = config.ollamaContextSize(forPrompt: prompt)
-        let body: [String: Any] = ["model": model, "prompt": prompt, "stream": true,
-                                   "keep_alive": 0, "options": ["num_ctx": ctx, "temperature": 0.2]]
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        var answer = ""
-        do {
-            let (bytes, resp) = try await URLSession.shared.bytes(for: req)
-            if let h = resp as? HTTPURLResponse, h.statusCode != 200 {
-                // Surface Ollama's own reason (e.g. "model 'x' not found).
-                var raw = ""
-                for try await l in bytes.lines {
-                    raw += l
-                    if raw.count > 1024 { break }
+        // Output bounded by the paper's task count: min(8192, max(4096,
+        // 1536 + 768 x tasks)) — thinking tokens count toward it too, so one
+        // request can never grind for hours. A cut answer (done_reason
+        // 'length') is NEVER discarded and never regenerated from scratch:
+        // the compile-repair loop in handle() completes it (javac errors +
+        // up to 4 fix rounds). Only an empty answer is a failure.
+        while true {
+            var req = URLRequest(url: URL(string: config.ollamaBase + "/api/generate")!)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.timeoutInterval = 900
+            // Final context: growth + floor + hard cap + automatic ceiling. The
+            // oversized-prompt block lives in AppDelegate.generate; nothing here
+            // ever grows past the ceiling on its own.
+            let ctx = config.ollamaContextSize(forPrompt: prompt)
+            // "think": true matches the backup branch (it sends no think key and
+            // qwen3 defaults to thinking) — that reasoning is what keeps the code
+            // faithful to the paper's spec. Ollama returns it in its own
+            // "thinking" field; the parser reads "response" only, so the answer
+            // stays pure code. Thinking tokens share the context window (num_ctx)
+            // — a cut answer is completed by the compile-repair loop. Ignored by
+            // models without a thinking mode. Ollama request only — OpenCode is
+            // untouched.
+            // num_predict = task-scaled output cap (4096–8192) so one request
+            // can never grind for hours; the compile-repair loop completes
+            // anything it cuts.
+            let np = config.numPredict > 0 ? config.numPredict : 4096
+            let body: [String: Any] = ["model": model, "prompt": prompt, "stream": true,
+                                       "think": true, "keep_alive": 0,
+                                       "options": ["num_ctx": ctx, "temperature": 0.2, "num_predict": np]]
+            req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+            var answer = ""
+            var thinking = 0
+            var truncated = false
+            do {
+                let (bytes, resp) = try await URLSession.shared.bytes(for: req)
+                if let h = resp as? HTTPURLResponse, h.statusCode != 200 {
+                    // Surface Ollama's own reason (e.g. "model 'x' not found).
+                    var raw = ""
+                    for try await l in bytes.lines {
+                        raw += l
+                        if raw.count > 1024 { break }
+                    }
+                    var detail = errorDetail(from: raw)
+                    // Context rejections: point at the manual Qwen ctx setting.
+                    if raw.contains("context") || raw.contains("length") {
+                        let base = detail ?? ""
+                        detail = base.isEmpty ? "raise Qwen ctx in Settings" : base + " · " + "raise Qwen ctx in Settings"
+                    }
+                    return .failed(classifyHTTP(status: h.statusCode,
+                                                retryAfterHeader: h.value(forHTTPHeaderField: "Retry-After"),
+                                                detail: detail))
                 }
-                var detail = errorDetail(from: raw)
-                // Context rejections: point at the manual Qwen ctx setting.
-                if raw.contains("context") || raw.contains("length") {
-                    let base = detail ?? ""
-                    detail = base.isEmpty ? "raise Qwen ctx in Settings" : base + " · " + "raise Qwen ctx in Settings"
+                for try await line in bytes.lines {
+                    guard let d = line.data(using: .utf8),
+                          let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
+                    if let e = obj["error"] as? String {
+                        return .failed(DropError(kind: .unknown("Ollama: \(e)")))
+                    }
+                    if let th = obj["thinking"] as? String, !th.isEmpty {
+                        thinking += th.count
+                        onStatus("🧠 Thinking… \(thinking) chars")
+                    }
+                    if let piece = obj["response"] as? String, !piece.isEmpty {
+                        answer += piece
+                        onChunk(piece)
+                        onStatus("\(label)… \(answer.count) chars")
+                    }
+                    // Truncation detection: with no output cap the only cut
+                    // cause is a full context (done_reason 'length'); 'stop' is
+                    // the model's natural end.
+                    if let dr = obj["done_reason"] as? String, dr == "length" { truncated = true }
                 }
-                return .failed(classifyHTTP(status: h.statusCode,
-                                            retryAfterHeader: h.value(forHTTPHeaderField: "Retry-After"),
-                                            detail: detail))
+                if truncated {
+                    // done_reason 'length' means the context filled before the
+                    // model finished. The partial answer is never discarded and
+                    // never regenerated from scratch: handle()'s compile-repair
+                    // loop completes it. Only an empty answer is a failure.
+                    if answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        return .failed(DropError(kind: .unknown(
+                            "context limit reached – no answer produced; raise Qwen ctx in Settings")))
+                    }
+                    onStatus("⚠️ Answer cut short by the context – completing via compile repair…")
+                }
+                return .ok(answer)
+            } catch {
+                let e = classifyURLError(error)
+                if !answer.isEmpty { return .interrupted(answer) }
+                return .failed(e)
             }
-            for try await line in bytes.lines {
-                guard let d = line.data(using: .utf8),
-                      let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
-                if let e = obj["error"] as? String {
-                    return .failed(DropError(kind: .unknown("Ollama: \(e)")))
-                }
-                if let piece = obj["response"] as? String, !piece.isEmpty {
-                    answer += piece
-                    onChunk(piece)
-                    onStatus("\(label)… \(answer.count) chars")
-                }
-            }
-            return .ok(answer)
-        } catch {
-            let e = classifyURLError(error)
-            if !answer.isEmpty { return .interrupted(answer) }
-            return .failed(e)
         }
     }
 
@@ -1482,10 +1749,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // New conversation → new x-opencode-session id, reused by every
         // request of this run (prompt, repair rounds, retries).
         config.sessionId = UUID().uuidString
+        // Size the output cap from the RAW paper (the prompt head's own
+        // "Task 1" examples must not inflate the count). Bounded so one run
+        // can never grind for hours; a cut answer is completed by repair.
+        config.numPredict = Self.numPredict(forPaper: paper)
         running = true
         textView.string = ""
         dropView.title = urls.count == 1 ? urls[0].lastPathComponent : "\(urls.count) files"
-        let prompt = PROMPT_HEADER + "\n\n" + paper
+        // Prompt fork: Ollama gets the student-level rules (silent checks); OpenCode
+        // keeps its pinned PROMPT_HEADER byte-for-byte.
+        let header = config.provider == "ollama" ? OLLAMA_PROMPT_HEADER : PROMPT_HEADER
+        let prompt = header + "\n\n" + paper
         if !paper.contains(".java =====") {
             setStatus("⚠️ No Java starter found · thinking anyway…")
         } else {
@@ -1496,7 +1770,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             defer { self.running = false; self.dropView.title = "Drop to share" }
             guard var answer = await self.generate(prompt: prompt, model: model, label: "✍️ Writing") else { return }
             if check {
-                let review = REVIEW_HEADER + "\n\n######## RULES ########\n" + PROMPT_HEADER
+                let review = REVIEW_HEADER + "\n\n######## RULES ########\n" + header
                     + "\n\n" + paper + "\n\n######## DRAFT SOLUTION ########\n" + answer
                 self.textView.string = ""
                 if let fixed = await self.generate(prompt: review, model: model, label: "🔍 Double-checking"),
@@ -1504,28 +1778,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     answer = fixed
                 }
             }
-            // Compile the answer against the starter; if javac fails, send the errors back for a fix (max 2 rounds)
+            // Compile the answer against the starter; if javac fails, send the errors back for a fix (max 4 rounds)
             var compiled: Bool? = nil
             var rounds = 0
             while true {
+                // Deterministic fixers (Ollama only) run before every compile check,
+                // so javac judges - and the repair model sees - the fixed answer.
+                let fixersOn = self.config.provider == "ollama"
+                if fixersOn {
+                    answer = AppDelegate.staticFixes(answer, starter: self.starterFiles)
+                }
                 self.setStatus("🧪 Compiling…")
+                // Full compile every round: javac's complete error set is the only
+                // truthful feed for the repair model.
                 guard let errs = await self.compileErrors(answer) else { compiled = nil; break }
                 if errs.isEmpty { compiled = true; break }
                 compiled = false
-                if rounds >= 2 { break }
+                if rounds >= 4 { break }
                 rounds += 1
                 let n = errs.components(separatedBy: "error:").count - 1
-                let fixPrompt = PROMPT_HEADER + "\n\n" + paper
-                    + "\n\n######## YOUR PREVIOUS ANSWER ########\n" + answer
-                    + "\n\n######## JAVAC ERRORS ########\n" + String(errs.prefix(6000))
-                    + "\n\n" + REPAIR_HEADER
+                let fixPrompt: String
+                if self.config.provider == "ollama" {
+                    // Targeted repair (Ollama only): errors + implicated sources —
+                    // never the full question and previous answer for a small fix.
+                    fixPrompt = OLLAMA_REPAIR_HEADER
+                        + "\n\n######## JAVAC ERRORS ########\n" + String(errs.prefix(6000))
+                        + "\n\n######## AFFECTED FILES ########\n"
+                        + AppDelegate.repairContext(answer: answer, starter: self.starterFiles, errs: errs)
+                } else {
+                    fixPrompt = PROMPT_HEADER + "\n\n" + paper
+                        + "\n\n######## YOUR PREVIOUS ANSWER ########\n" + answer
+                        + "\n\n######## JAVAC ERRORS ########\n" + String(errs.prefix(6000))
+                        + "\n\n" + REPAIR_HEADER
+                }
                 self.textView.string = ""
                 guard let fixes = await self.generate(prompt: fixPrompt, model: model, label: "🔧 Fixing \(n) compile error(s)") else { break }
                 let merged = AppDelegate.mergeFixes(answer, fixes)
                 if merged == answer { break }
                 answer = merged
             }
-            self.lastAnswer = AppDelegate.applyImportFix(self.stripFences(answer))
+            var finalAnswer = AppDelegate.applyImportFix(self.stripFences(answer))
+            if self.config.provider == "ollama" {
+                finalAnswer = AppDelegate.staticFixes(finalAnswer, starter: self.starterFiles)
+                // The prompt head forbids the model writing a HOW TO TEST section,
+                // so Drop appends one deterministically at finalize (Ollama only).
+                finalAnswer = AppDelegate.howToTestBlock(finalAnswer)
+            }
+            self.lastAnswer = finalAnswer
             self.textView.string = self.lastAnswer
             self.copyToClipboard(self.lastAnswer)
             NSSound(named: NSSound.Name("Glass"))?.play()
@@ -1546,7 +1845,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }.value
     }
 
-    // nil = could not check (no JDK / no Spring jars in ~/.m2), "" = compiles, otherwise javac errors
+    // ---- Ollama student-quality helpers (never used on the OpenCode path) ----
+
+    // Base file names javac implicated ("Foo.java:12: error:" lines).
+    static func errorFileNames(_ errs: String) -> Set<String> {
+        var names = Set<String>()
+        let re = try? NSRegularExpression(pattern: #"([A-Za-z0-9_$.]+\.java):\d+"#)
+        let ns = NSRange(errs.startIndex..., in: errs)
+        for m in (re?.matches(in: errs, range: ns) ?? []) {
+            if let r = Range(m.range(at: 1), in: errs) { names.insert(String(errs[r])) }
+        }
+        return names
+    }
+
+    // Targeted repair context (Ollama only): the sources javac implicated, each
+    // COMPLETE, plus the sources they reference (simple-name matching) — never
+    // the full question, never unchanged answer files. Falls back to all answer
+    // files when the error lines name nothing.
+    static func repairContext(answer: String, starter: [String: String], errs: String) -> String {
+        var sources = starter
+        for (k, v) in parseAnswerFiles(answer) { sources[k] = AppDelegate.ensureUtilImport(v) }
+        let names = errorFileNames(errs)
+        var affected = sources.keys.filter { names.contains(($0 as NSString).lastPathComponent) }
+        if affected.isEmpty { affected = Array(parseAnswerFiles(answer).keys) }
+        var out: [String] = []
+        var seen = Set<String>()
+        var referenced = Set<String>()
+        for k in affected.sorted() {
+            guard let body = sources[k] else { continue }
+            out.append("// ===== FILE: " + k + " =====")
+            out.append(body)
+            seen.insert(k)
+            for sk in sources.keys where !seen.contains(sk) {
+                let cls = ((sk as NSString).lastPathComponent as NSString).deletingPathExtension
+                if !cls.isEmpty && body.contains(cls) { referenced.insert(sk) }
+            }
+        }
+        var total = out.joined(separator: "\n").count
+        for k in referenced.sorted() {
+            guard let body = sources[k], total + body.count < 40000 else { continue }
+            out.append("// ===== FILE: " + k + " =====")
+            out.append(body)
+            seen.insert(k)
+            total += body.count
+        }
+        return out.joined(separator: "\n")
+    }
+
+    // nil = could not check (no JDK / no Spring jars in ~/.m2), "" = compiles, otherwise javac errors.
+    // Every round compiles the FULL source set and returns javac's complete output:
+    // partial subsets gave the repair model noisy partial error sets.
     static func runJavac(answer: String, starter: [String: String]) -> String? {
         let fm = FileManager.default
         let jh = Process()
@@ -1598,8 +1946,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try? fm.createDirectory(at: out, withIntermediateDirectories: true)
         let p = Process()
         p.executableURL = URL(fileURLWithPath: javac)
-        p.arguments = ["--release", "17", "-proc:none", "-nowarn", "-encoding", "UTF-8",
-                       "-d", out.path, "-cp", jars.joined(separator: ":")] + paths
+        var args = ["--release", "17", "-proc:none", "-nowarn", "-encoding", "UTF-8",
+                    "-d", out.path, "-cp", jars.joined(separator: ":")]
+        // Sources stay reachable through -sourcepath. The root
+        // must be the PACKAGE root (src/main/java), not the tmp root — javac
+        // resolves `edu.a.B` to <root>/edu/a/B.java. The bare tmp root is kept
+        // as a second entry for flat layouts.
+        args += ["-sourcepath", tmp.path + "/src/main/java:" + tmp.path]
+        args += paths
+        p.arguments = args
         let ep = Pipe()
         p.standardError = ep
         p.standardOutput = ep
@@ -1629,6 +1984,277 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let rest = String(h.dropFirst("// ===== FILE:".count)).trimmingCharacters(in: .whitespaces)
         guard let path = rest.components(separatedBy: " ").first, !path.isEmpty else { return nil }
         return (path as NSString).lastPathComponent
+    }
+
+    // Gives every @PathVariable / @RequestParam an explicit name: @PathVariable long id -> @PathVariable("id") long id
+    static func nameRequestParams(_ code: String) -> String {
+        guard let re = try? NSRegularExpression(pattern:
+            "@(PathVariable|RequestParam)(\\(([^)]*)\\))?(\\s+)(final\\s+)?([\\w.<>\\[\\],?]+)\\s+(\\w+)") else { return code }
+        var out = code as NSString
+        let matches = re.matches(in: code, range: NSRange(location: 0, length: out.length))
+        for m in matches.reversed() {
+            let ns = out
+            func g(_ i: Int) -> String? {
+                let r = m.range(at: i)
+                return r.location == NSNotFound ? nil : ns.substring(with: r)
+            }
+            guard let ann = g(1), let space = g(4), let type = g(6), let name = g(7) else { continue }
+            let fin = g(5) ?? ""
+            var newAnn: String
+            if let args = g(3) {
+                let a = args.trimmingCharacters(in: .whitespaces)
+                if a.isEmpty { newAnn = "@\(ann)(\"\(name)\")" }
+                else if a.hasPrefix("\"") || a.contains("name") || a.contains("value") { continue }
+                else { newAnn = "@\(ann)(name = \"\(name)\", \(a))" }
+            } else {
+                newAnn = "@\(ann)(\"\(name)\")"
+            }
+            let replacement = newAnn + space + fin + type + " " + name
+            out = ns.replacingCharacters(in: m.range, with: replacement) as NSString
+        }
+        return out as String
+    }
+
+    // If the RELEASE_OUTSIDE_WINDOW check comes straight before the DEADLINE check, swap them (DEADLINE must win)
+    static func fixReasonOrder(_ code: String) -> String {
+        let pattern = #"(if \([^{]*\)\s*\{[^{}]*"RELEASE_OUTSIDE_WINDOW"[^{}]*\})(\s*)(if \([^{]*\)\s*\{[^{}]*"DEADLINE"[^{}]*\})"#
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return code }
+        return re.stringByReplacingMatches(in: code, range: NSRange(location: 0, length: (code as NSString).length),
+                                           withTemplate: "$3$2$1")
+    }
+
+    // A controller method whose body is just "return service.x(...)" must return exactly the type that
+    // service method returns (e.g. DispatchMission, not AirMission). Fixes the return type automatically.
+    static func alignControllerReturns(_ answer: String, starter: [String: String]) -> String {
+        // 1) return types of the service's public methods (answer copy first, starter as fallback)
+        var serviceTypes: [String: String] = [:]
+        guard let sig = try? NSRegularExpression(pattern: "public\\s+([A-Za-z0-9_<>, ?\\[\\]]+?)\\s+([a-zA-Z0-9_]+)\\s*\\(") else { return answer }
+        func collect(_ text: String) {
+            let ns = text as NSString
+            for m in sig.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                let type = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
+                let name = ns.substring(with: m.range(at: 2))
+                if type == "class" || type.hasSuffix(" class") { continue }
+                if serviceTypes[name] == nil { serviceTypes[name] = type }
+            }
+        }
+        for sec in sections(answer) {
+            if let n = fileName(sec.0), n.hasSuffix("Service.java") { collect(sec.1.joined(separator: "\n")) }
+        }
+        for (path, text) in starter where path.hasSuffix("Service.java") { collect(text) }
+        if serviceTypes.isEmpty { return answer }
+        // 2) in controller files, fix "public T m(...) { return svc.x(...)" when T differs from x's type
+        guard let ctl = try? NSRegularExpression(pattern:
+            "(public\\s+)([A-Za-z0-9_<>, ?\\[\\]]+?)(\\s+[a-zA-Z0-9_]+\\s*\\([^)]*\\)\\s*\\{\\s*return\\s+[a-zA-Z0-9_]+\\.)([a-zA-Z0-9_]+)\\s*\\(") else { return answer }
+        var out: [String] = []
+        var inController = false
+        for sec in sections(answer) {
+            if let h = sec.0 {
+                out.append(h)
+                inController = (fileName(h) ?? "").hasSuffix("Controller.java")
+            }
+            var body = sec.1.joined(separator: "\n")
+            if inController {
+                let ns = body as NSString
+                for m in ctl.matches(in: body, range: NSRange(location: 0, length: ns.length)).reversed() {
+                    let have = ns.substring(with: m.range(at: 2)).trimmingCharacters(in: .whitespaces)
+                    let call = ns.substring(with: m.range(at: 4))
+                    guard let want = serviceTypes[call], want != have else { continue }
+                    if have.hasPrefix("ResponseEntity") || have.hasPrefix("Map") || want == "void" { continue }
+                    body = (body as NSString).replacingCharacters(in: m.range(at: 2), with: want)
+                }
+            }
+            if !sec.1.isEmpty { out.append(body) }
+        }
+        return out.joined(separator: "\n")
+    }
+
+    // The prompt head forbids the model from writing a HOW TO TEST section, so
+    // Drop appends one deterministically at finalize (Ollama only): numbered
+    // curl lines for the real Spring mappings, or a javac/java recipe for plain
+    // Java. Every line is a "//" comment, so the pasted answer stays pure code.
+    static func howToTestBlock(_ answer: String) -> String {
+        // Strip any model-written HOW TO TEST block first (the head forbids one,
+        // but a stray block must never survive into the final answer).
+        var base = answer
+        if let m = base.range(of: "// ===== HOW TO TEST") {
+            var cut = base.endIndex
+            if let next = base.range(of: "\n// ===== FILE:", range: m.upperBound..<base.endIndex) {
+                cut = next.lowerBound
+            }
+            base = String(base[..<m.lowerBound]) + String(base[cut...])
+        }
+        base = base.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // File bodies from the answer's FILE sections (what the student pastes is what we document).
+        var files: [(String, String)] = []
+        for sec in sections(base) {
+            if let n = fileName(sec.0) { files.append((n, sec.1.joined(separator: "\n"))) }
+        }
+
+        func sample(_ type: String) -> String {
+            let t = type.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("boolean") || t.hasPrefix("Boolean") { return "true" }
+            if t.hasPrefix("String") { return "\"abc\"" }
+            if t.hasPrefix("LocalDateTime") { return "\"2026-01-01T09:00:00\"" }
+            if t.hasPrefix("LocalDate") { return "\"2026-01-01\"" }
+            if t.hasPrefix("List") || t.hasPrefix("Set") || t.hasSuffix("[]") { return "[]" }
+            return "1"
+        }
+        func jsonFor(_ type: String, depth: Int = 0) -> String {
+            // Depth-capped: a self-referential DTO must never crash the finalize.
+            if depth >= 3 { return "{}" }
+            let t = type.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("int") || t.hasPrefix("long") || t.hasPrefix("double") || t.hasPrefix("float")
+                || t.hasPrefix("Integer") || t.hasPrefix("Long") || t.hasPrefix("Double")
+                || t.hasPrefix("boolean") || t.hasPrefix("Boolean") || t.hasPrefix("String")
+                || t.hasPrefix("LocalDate") || t.hasPrefix("List") || t.hasPrefix("Set") || t.hasSuffix("[]") {
+                return sample(t)
+            }
+            for (_, body) in files {
+                let ns = body as NSString
+                let full = NSRange(location: 0, length: ns.length)
+                let esc = NSRegularExpression.escapedPattern(for: t)
+                // record Foo(Type a, Type b)
+                if let re = try? NSRegularExpression(pattern: "record\\s+" + esc + "\\s*\\(([^)]*)\\)"),
+                   let m = re.firstMatch(in: body, range: full) {
+                    var pairs: [String] = []
+                    for c in ns.substring(with: m.range(at: 1)).components(separatedBy: ",") {
+                        let parts = c.trimmingCharacters(in: .whitespaces).components(separatedBy: " ").filter { !$0.isEmpty }
+                        if parts.count >= 2 { pairs.append("\"\(parts[1])\": \(jsonFor(parts[0], depth: depth + 1))") }
+                    }
+                    if !pairs.isEmpty { return "{" + pairs.joined(separator: ", ") + "}" }
+                }
+                // class Foo { private Type name; ... }
+                if body.range(of: "(?:class|record)\\s+" + esc + "\\b", options: .regularExpression) != nil,
+                   let re = try? NSRegularExpression(pattern: "(?:private|protected)\\s+(?:final\\s+)?([A-Za-z0-9_<>, \\[\\]]+?)\\s+(\\w+)\\s*[;=]") {
+                    var pairs: [String] = []
+                    for m in re.matches(in: body, range: full) {
+                        let ftype = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
+                        if ftype == "static" { continue }
+                        pairs.append("\"\(ns.substring(with: m.range(at: 2)))\": \(jsonFor(ftype, depth: depth + 1))")
+                    }
+                    if !pairs.isEmpty { return "{" + pairs.joined(separator: ", ") + "}" }
+                }
+            }
+            return "{}"
+        }
+
+        // The deterministic block itself.
+        var lines: [String] = ["", "// ===== HOW TO TEST ====="]
+        let isSpring = files.contains { $0.1.range(of: "@(Rest)?Controller|@(Get|Post|Put|Delete|Patch|Request)Mapping", options: .regularExpression) != nil }
+        if isSpring {
+            lines.append("// 1. Start the app: mvn spring-boot:run")
+            var port = "8080"
+            for (_, body) in files {
+                if let re = try? NSRegularExpression(pattern: "server\\.port\\s*=\\s*(\\d+)"),
+                   let m = re.firstMatch(in: body, range: NSRange(location: 0, length: (body as NSString).length)) {
+                    port = (body as NSString).substring(with: m.range(at: 1))
+                }
+            }
+            var step = 2
+            for (_, body) in files {
+                let ns = body as NSString
+                let full = NSRange(location: 0, length: ns.length)
+                guard body.range(of: "@(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)", options: .regularExpression) != nil else { continue }
+                var classLoc = ns.range(of: "class ").location
+                if classLoc == NSNotFound { classLoc = 0 }
+                // class-level @RequestMapping prefix (must come before the class keyword)
+                var prefix = ""
+                if let re = try? NSRegularExpression(pattern: "@RequestMapping\\(\\s*(?:(?:value|name)\\s*=\\s*)?\"([^\"]*)\""),
+                   let m = re.firstMatch(in: body, range: NSRange(location: 0, length: classLoc)) {
+                    prefix = ns.substring(with: m.range(at: 1))
+                }
+                let inner = NSRange(location: classLoc, length: full.length - classLoc)
+                var hits: [(String, String, NSRange)] = []
+                if let re = try? NSRegularExpression(pattern: "@(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping)\\s*(?:\\(\\s*(?:(?:value|name)\\s*=\\s*)?\"([^\"]*)\"|\\(\\s*\\{\\s*\"([^\"]*)\")?") {
+                    for m in re.matches(in: body, range: inner) {
+                        // GetMapping -> Get -> GET: curl needs the HTTP verb, never
+                        // the annotation name.
+                        let verb = ns.substring(with: m.range(at: 1)).replacingOccurrences(of: "Mapping", with: "")
+                        var p = ""
+                        if m.range(at: 2).location != NSNotFound { p = ns.substring(with: m.range(at: 2)) }
+                        else if m.range(at: 3).location != NSNotFound { p = ns.substring(with: m.range(at: 3)) }
+                        hits.append((verb, p, m.range))
+                    }
+                }
+                if let re = try? NSRegularExpression(pattern: "@RequestMapping\\(([^)]*)\\)") {
+                    for m in re.matches(in: body, range: inner) {
+                        let args = ns.substring(with: m.range(at: 1))
+                        guard let rre = try? NSRegularExpression(pattern: "method\\s*=\\s*RequestMethod\\.(\\w+)"),
+                              let rm = rre.firstMatch(in: args, range: NSRange(location: 0, length: (args as NSString).length)) else { continue }
+                        let verb = (args as NSString).substring(with: rm.range(at: 1))
+                        var p = ""
+                        if let pre = try? NSRegularExpression(pattern: "\"([^\"]*)\""),
+                           let pm = pre.firstMatch(in: args, range: NSRange(location: 0, length: (args as NSString).length)) {
+                            p = (args as NSString).substring(with: pm.range(at: 1))
+                        }
+                        hits.append((verb, p, m.range))
+                    }
+                }
+                for (verb, p, mrange) in hits {
+                    var path = prefix + p
+                    if let re = try? NSRegularExpression(pattern: "\\{[^}]+\\}") {
+                        path = re.stringByReplacingMatches(in: path, range: NSRange(location: 0, length: (path as NSString).length), withTemplate: "1")
+                    }
+                    if !path.hasPrefix("/") { path = "/" + path }
+                    // signature: everything from the annotation to the method body's brace
+                    let after = NSRange(location: NSMaxRange(mrange), length: full.length - NSMaxRange(mrange))
+                    let brace = ns.range(of: "{", options: [], range: after).location
+                    let sigEnd = brace == NSNotFound ? full.length : brace
+                    let sig = ns.substring(with: NSRange(location: after.location, length: sigEnd - after.location))
+                    let sigNS = sig as NSString
+                    let sigRange = NSRange(location: 0, length: sigNS.length)
+                    var query: [String] = []
+                    var json = ""
+                    if let re = try? NSRegularExpression(pattern: "@RequestParam(?:\\(\\s*(?:(?:value|name)\\s*=\\s*)?\"([^\"]*)\"[^)]*\\))?\\s+(?:final\\s+)?([\\w.<>\\[\\]]+)\\s+(\\w+)") {
+                        for m in re.matches(in: sig, range: sigRange) {
+                            let qn = m.range(at: 1).location != NSNotFound ? sigNS.substring(with: m.range(at: 1)) : sigNS.substring(with: m.range(at: 3))
+                            let qv = sample(sigNS.substring(with: m.range(at: 2))).replacingOccurrences(of: "\"", with: "")
+                            query.append("\(qn)=\(qv)")
+                        }
+                    }
+                    if let re = try? NSRegularExpression(pattern: "@RequestBody(?:\\([^)]*\\))?\\s+(?:final\\s+)?([\\w.<>\\[\\]]+)\\s+\\w+"),
+                       let m = re.firstMatch(in: sig, range: sigRange) {
+                        json = jsonFor(sigNS.substring(with: m.range(at: 1)))
+                    }
+                    var url = "http://localhost:\(port)" + path
+                    if !query.isEmpty { url += "?" + query.joined(separator: "&") }
+                    var line = "// \(step). Try it: curl -X \(verb.uppercased()) '\(url)'"
+                    if !json.isEmpty { line += " -H \"Content-Type: application/json\" -d '\(json)'" }
+                    lines.append(line)
+                    step += 1
+                }
+            }
+            if step == 2 { lines.append("// 2. Call the controller endpoints (paths are in the mappings above)") }
+        } else if files.contains(where: { $0.1.range(of: "static\\s+void\\s+main\\s*\\(", options: .regularExpression) != nil }) {
+            // plain Java: javac/java recipe around the class with "static void main"
+            var mainCls = "Main"
+            for (n, body) in files {
+                if body.range(of: "static\\s+void\\s+main\\s*\\(", options: .regularExpression) != nil {
+                    let ns = body as NSString
+                    var pkg = ""
+                    if let re = try? NSRegularExpression(pattern: "(?m)^\\s*package\\s+([\\w.]+)\\s*;"),
+                       let m = re.firstMatch(in: body, range: NSRange(location: 0, length: ns.length)) {
+                        pkg = ns.substring(with: m.range(at: 1))
+                    }
+                    let cls = n.replacingOccurrences(of: ".java", with: "")
+                    mainCls = pkg.isEmpty ? cls : pkg + "." + cls
+                    break
+                }
+            }
+            lines.append("// 1. Compile: javac -d out $(find . -name \"*.java\")")
+            lines.append("// 2. Run:     java -cp out \(mainCls)")
+        } else {
+            lines.append("// 1. Open the project in IntelliJ and run the main class")
+            lines.append("// 2. Or from a terminal: javac -d out $(find . -name \"*.java\") then java -cp out <MainClass>")
+        }
+        return base + "\n" + lines.joined(separator: "\n") + "\n"
+    }
+
+    // Applies every deterministic fixer in the right order (Ollama path only).
+    static func staticFixes(_ answer: String, starter: [String: String]) -> String {
+        return alignControllerReturns(fixReasonOrder(nameRequestParams(answer)), starter: starter)
     }
 
     // Replaces the answer's FILE sections with the fixed versions (adds new files before HOW TO TEST)
@@ -1737,14 +2363,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         config.ollamaContextSize(forPrompt: prompt)
     }
 
+    // Output sizing (Ollama): min(8192, max(4096, 1536 + 768 x taskCount)),
+    // counted on the RAW paper. Bounded so one request can never grind for
+    // hours (thinking tokens count toward it too); any cut answer is
+    // completed by the compile-repair loop.
+    static func taskCount(in text: String) -> Int {
+        var nums = Set<Int>()
+        let re = try? NSRegularExpression(pattern: #"\b[Tt]ask\s+(\d+)\b"#)
+        let ns = NSRange(text.startIndex..., in: text)
+        for m in (re?.matches(in: text, range: ns) ?? []) {
+            if let r = Range(m.range(at: 1), in: text), let n = Int(text[r]) { nums.insert(n) }
+        }
+        return nums.isEmpty ? 1 : nums.count
+    }
+    static func numPredict(forPaper paper: String) -> Int {
+        min(8192, max(4096, 1536 + 768 * taskCount(in: paper)))
+    }
+
     // Single entry point for ALL providers (Phase 9: shared pipeline).
     // The repair loop in handle() calls this too, so both providers get
     // compile-check + two repair rounds for free.
     @MainActor
     func generate(prompt: String, model: String, label: String) async -> String? {
-        // Final context policy: a prompt above the automatic ceiling is
-        // BLOCKED — never truncated. The user is told to raise the manual
-        // Qwen ctx setting (larger contexts pressure memory and slow the Mac).
+        // Final context policy: a request whose prompt alone exceeds the
+        // automatic ceiling is BLOCKED — never truncated. The user is told to
+        // raise the manual Qwen ctx setting (larger contexts pressure memory
+        // and slow the Mac).
         if activeProvider.id == "ollama" && config.ollamaContext <= 0 {
             let autoCtx = config.ollamaContextSize(forPrompt: prompt)
             if prompt.count / 3 > autoCtx {

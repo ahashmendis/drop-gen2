@@ -86,11 +86,18 @@ Stored locally, never in Keychain/Credential Manager, user-only permissions (060
 - `ollama.context` = manual `num_ctx` override, `0` (default) = automatic:
   prompt-size growth floored at the hardware preset (**8 GB → 8192 ·
   16 GB → 16384 · 32 GB+ → 32768**) and clamped to a conservative automatic
-  ceiling (**8 GB → 8192 · 16–32 GB → 16384 · 32 GB+ → 65536**). The prompt
+  ceiling (**8 GB → 16384 · 16–32 GB → 16384 · 32 GB+ → 65536** — an 8 GB
+  Mac was measured generating a full practice paper at 16384, and the
+  paper's prompt plus its full answer does not fit in 8192). The prompt
   is **never silently truncated**: if it needs more than the automatic
   ceiling, the run stops and Drop points you at Settings → **Qwen ctx**
   (raise it manually — larger contexts use more memory and can slow the
-  laptop). Manual values are respected up to the 65536 hard cap.
+  laptop). Manual values are respected up to the 65536 hard cap. The
+  model's answer is **never discarded** either: the output budget is sized
+  to the paper's task count (4096–8192 tokens — bounded so one run can
+  never grind for hours), and if the context still fills mid-answer, Drop
+  completes the code with its compile-repair loop (javac errors + up to 4
+  targeted fix rounds) and copies the honest result.
 - The API key is only ever sent to `base_url` — never logged, never shown in errors.
 - OpenCode requests match the verified baseline exactly: `User-Agent: Drop/1.0`,
   a stable `x-opencode-session` id (one per conversation; retries reuse it),
