@@ -1,0 +1,254 @@
+{
+  "id": "simple-parking",
+  "title": "Parking Access & Fee Quotation API",
+  "level": "SIMPLE",
+  "module": "5COSC019W Object Oriented Programming (practice paper)",
+  "inputs": {
+    "paper": "inputs/SIMPLE_Practice_Paper.docx",
+    "starter": "inputs/SIMPLE_Starter_Project.zip"
+  },
+  "tests": {
+    "runner": "java-main",
+    "main": "bench.ParkingChecks",
+    "dir": "tests",
+    "support": "../_support"
+  },
+  "requirementKinds": {
+    "automated": "verified by the tests listed",
+    "manual": "needs a person to assess; never counted as passed",
+    "untestable": "cannot be tested (source material missing or paper ambiguous)"
+  },
+  "requirements": [
+    {
+      "id": "A1.1",
+      "text": "HourlyPass keeps inheritance, final rate field, constructor chaining and public getter",
+      "marks": 4,
+      "kind": "automated",
+      "tests": [
+        "S-HP-06"
+      ]
+    },
+    {
+      "id": "A1.2",
+      "text": "priceCents uses ceiling division into billable hours (1-60 min = 1 h, 61-120 = 2 h)",
+      "marks": 6,
+      "kind": "automated",
+      "tests": [
+        "S-HP-01",
+        "S-HP-02"
+      ]
+    },
+    {
+      "id": "A1.3",
+      "text": "hourly price = rounded hours x rateCents, in integer cents",
+      "marks": 4,
+      "kind": "automated",
+      "tests": [
+        "S-HP-02",
+        "S-HP-03"
+      ]
+    },
+    {
+      "id": "A1.4",
+      "text": "reject zero/negative stays with IllegalArgumentException and prevent arithmetic overflow",
+      "marks": 4,
+      "kind": "automated",
+      "tests": [
+        "S-HP-04",
+        "S-HP-05"
+      ]
+    },
+    {
+      "id": "A2.1",
+      "text": "WeekendPass extends ParkingPass with (long,String,int flatCents) and getFlatCents()",
+      "marks": 6,
+      "kind": "automated",
+      "tests": [
+        "S-WP-01"
+      ]
+    },
+    {
+      "id": "A2.2",
+      "text": "weekend price: flat for 1-480 min, +150 per commenced extra hour, reject non-positive stays",
+      "marks": 8,
+      "kind": "automated",
+      "tests": [
+        "S-WP-02",
+        "S-WP-03",
+        "S-WP-04"
+      ]
+    },
+    {
+      "id": "A2.3",
+      "text": "allQuotes: polymorphic priceCents, sorted by price ASC then ID ASC, no instanceof",
+      "marks": 8,
+      "kind": "automated",
+      "tests": [
+        "S-Q-01",
+        "S-Q-02",
+        "S-Q-03",
+        "S-Q-05",
+        "S-Q-06"
+      ]
+    },
+    {
+      "id": "A2.4",
+      "text": "repository seeds WeekendPass(2, VAN-202, 800)",
+      "marks": 0,
+      "kind": "automated",
+      "tests": [
+        "S-WP-05"
+      ],
+      "note": "instruction in the paper, no marks attached"
+    },
+    {
+      "id": "A3.1",
+      "text": "quote(id, minutes) validates positive minutes and calculates the pass charge",
+      "marks": 4,
+      "kind": "automated",
+      "tests": [
+        "S-SV-01",
+        "S-Q-04"
+      ]
+    },
+    {
+      "id": "A3.2",
+      "text": "missing IDs raise PassNotFoundException and map to 404 ApiError NOT_FOUND",
+      "marks": 6,
+      "kind": "automated",
+      "tests": [
+        "S-SV-02",
+        "S-ER-01"
+      ]
+    },
+    {
+      "id": "A3.3",
+      "text": "addHourly validates positive unique id, nonblank registration, positive rate; trims registration",
+      "marks": 6,
+      "kind": "automated",
+      "tests": [
+        "S-SV-03",
+        "S-SV-04",
+        "S-SV-05",
+        "S-SV-06",
+        "S-SV-07"
+      ]
+    },
+    {
+      "id": "A3.4",
+      "text": "IllegalArgumentException maps to 400 ApiError BAD_REQUEST",
+      "marks": 4,
+      "kind": "automated",
+      "tests": [
+        "S-ER-02"
+      ]
+    },
+    {
+      "id": "A4.1",
+      "text": "GET /api/passes/{id}/quote?minutes=.. returns a Quote",
+      "marks": 5,
+      "kind": "automated",
+      "tests": [
+        "S-HT-01"
+      ]
+    },
+    {
+      "id": "A4.2",
+      "text": "GET /api/passes/quotes?minutes=.. returns sorted quotes for all passes",
+      "marks": 5,
+      "kind": "automated",
+      "tests": [
+        "S-HT-02",
+        "S-HT-03"
+      ]
+    },
+    {
+      "id": "A4.3",
+      "text": "POST /api/passes/hourly accepts the JSON body and returns the created pass",
+      "marks": 5,
+      "kind": "automated",
+      "tests": [
+        "S-HT-04"
+      ]
+    },
+    {
+      "id": "A4.4",
+      "text": "POST returns HTTP 201",
+      "marks": 3,
+      "kind": "automated",
+      "tests": [
+        "S-HT-04",
+        "S-HT-05"
+      ]
+    },
+    {
+      "id": "A4.5",
+      "text": "handlers delegate business decisions to service methods, with the correct Spring annotations",
+      "marks": 2,
+      "kind": "manual",
+      "note": "Read ParkingController: no business rules in handlers."
+    },
+    {
+      "id": "B.1",
+      "text": "61 minutes at 250 cents/hour = 500 cents",
+      "marks": 3,
+      "kind": "automated",
+      "tests": [
+        "S-HP-02",
+        "S-HT-01"
+      ]
+    },
+    {
+      "id": "B.2",
+      "text": "WeekendPass 481 minutes with 800 flat = 950 cents",
+      "marks": 3,
+      "kind": "automated",
+      "tests": [
+        "S-WP-03",
+        "S-Q-01"
+      ]
+    },
+    {
+      "id": "B.3",
+      "text": "GET /quotes?minutes=61 returns deterministic ascending charges",
+      "marks": 3,
+      "kind": "automated",
+      "tests": [
+        "S-HT-03",
+        "S-Q-02"
+      ]
+    },
+    {
+      "id": "B.4",
+      "text": "missing pass quotation returns 404 and the correct error code",
+      "marks": 3,
+      "kind": "automated",
+      "tests": [
+        "S-ER-01"
+      ]
+    },
+    {
+      "id": "B.5",
+      "text": "invalid minutes or invalid POST returns 400 without persisting a pass",
+      "marks": 4,
+      "kind": "automated",
+      "tests": [
+        "S-HT-06",
+        "S-HT-07"
+      ]
+    },
+    {
+      "id": "B.6",
+      "text": "valid POST returns 201 and the pass appears in a later list/quote request",
+      "marks": 4,
+      "kind": "automated",
+      "tests": [
+        "S-HT-04",
+        "S-HT-05"
+      ]
+    }
+  ],
+  "expectedNewFiles": [
+    "model/WeekendPass.java"
+  ]
+}

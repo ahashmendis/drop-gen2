@@ -1,0 +1,11 @@
+sym ^struct OpenCodeGoProvider 9b3ac90716fc0791
+sym ^struct DropConfig f1b12be35aec61cc
+sym ^struct OllamaProvider 64b8af2fa1d34945
+sym ^func classifyHTTP 698f3c60e1a7b1dc
+sym ^func classifyURLError 863d3a5f2730dc8e
+sym ^func prepareOllama f997247d9bc42a2b
+sym ^protocol ProviderAdapter bc6d1c993418b7d6
+hdr PROMPT_HEADER 1c85a064f26e8448
+hdr REPAIR_HEADER 456d677ea2189e6d
+hdr OLLAMA_PROMPT_HEADER 866682a2783d6206
+hdr OLLAMA_REPAIR_HEADER f2e28ad575c0aa82

@@ -1,0 +1,8 @@
+ACD practice paper PAPER_MARKER_XYZ
+Instructions: answer all questions. Use React with TypeScript.
+Section A - Multiple choice and True/False (2 marks)
+A1. Which array method accumulates a single value?
+A. find() B. reduce() C. sort() D. slice()
+A2. True or False: find() returns every matching element.
+Section D - Programming (10 marks)
+D1. Explain the purpose of the Outlet component in React Router. Then create a Hello component in src/components/Hello.tsx with a counter button using useState. (10 marks)

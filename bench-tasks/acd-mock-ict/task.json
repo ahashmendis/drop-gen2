@@ -1,0 +1,526 @@
+{
+  "id": "acd-mock-ict",
+  "title": "ACD mock ICT (React, TypeScript, TanStack Query, Zustand, security)",
+  "level": "MOCK",
+  "subject": "acd",
+  "module": "5COSC026W Advanced Client-Side Development — mock paper and model answers (practice material)",
+  "inputs": {
+    "paper": "inputs/MOCK_ICT.docx",
+    "starter": ""
+  },
+  "tests": {
+    "runner": "acd",
+    "dir": "",
+    "support": "",
+    "main": ""
+  },
+  "requirementKinds": {
+    "objective": "multiple-choice / true-false graded automatically against the answer key (counts as an automated result)",
+    "automated": "code executed or compiled by a test (counts as an automated result)",
+    "static": "pattern check on the answer text — reported separately, NOT a test and not counted as functional correctness",
+    "manual": "rubric marks assessed by a person (manual.json); never counted as passed automatically",
+    "untestable": "cannot be tested"
+  },
+  "expectedNewFiles": [],
+  "requirements": [
+    {
+      "id": "A1",
+      "question": "A1",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "B",
+      "text": "A React application needs to display the total value of all items in a shopping basket. Which JavaScript array method is most appropriate fo"
+    },
+    {
+      "id": "A2",
+      "question": "A2",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "C",
+      "text": "A developer wants to navigate programmatically to /dashboard after a user successfully signs in. Which React Router Hook is designed for thi"
+    },
+    {
+      "id": "A3",
+      "question": "A3",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "B",
+      "text": "In TypeScript, which keyword is used to define a custom type alias?"
+    },
+    {
+      "id": "A4",
+      "question": "A4",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "A",
+      "text": "A React application needs to display different content depending on whether a user has selected a particular tab. Which programming techniqu"
+    },
+    {
+      "id": "A5",
+      "question": "A5",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "C",
+      "text": "Which HTTP status code indicates that a request was understood but the user is not authenticated?"
+    },
+    {
+      "id": "A6",
+      "question": "A6",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "B",
+      "text": "Which React Router component allows child routes to render inside a parent layout?"
+    },
+    {
+      "id": "A7",
+      "question": "A7",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "A",
+      "text": "What is the main purpose of Promise.all() in JavaScript?"
+    },
+    {
+      "id": "A8",
+      "question": "A8",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "A",
+      "text": "In TypeScript, what is the purpose of an interface?"
+    },
+    {
+      "id": "A9",
+      "question": "A9",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "A",
+      "text": "Which CSS property is particularly useful for creating layouts with named grid areas?"
+    },
+    {
+      "id": "A10",
+      "question": "A10",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "B",
+      "text": "A developer wants to retrieve the identifier from a dynamic route such as /products/42. Which React Router Hook is most suitable?"
+    },
+    {
+      "id": "A11",
+      "question": "A11",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "A",
+      "text": "What does the staleTime option in TanStack Query control?"
+    },
+    {
+      "id": "A12",
+      "question": "A12",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "C",
+      "text": "Which Zustand function is commonly used to access a particular piece of data from a store?"
+    },
+    {
+      "id": "A13",
+      "question": "A13",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "A",
+      "text": "What is the purpose of an HTTP 204 No Content response?"
+    },
+    {
+      "id": "A14",
+      "question": "A14",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "B",
+      "text": "Which TypeScript type would be most appropriate for a variable that can contain either a string or a number?"
+    },
+    {
+      "id": "A15",
+      "question": "A15",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "B",
+      "text": "What is the main purpose of the invalidateQueries() function in TanStack Query?"
+    },
+    {
+      "id": "A16",
+      "question": "A16",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "C",
+      "text": "Which CSS function allows a property to have a preferred value while respecting minimum and maximum limits?"
+    },
+    {
+      "id": "A17",
+      "question": "A17",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "A",
+      "text": "A developer wants to prevent a user from submitting a form if an email address does not meet a required format. Which approach is most appro"
+    },
+    {
+      "id": "A18",
+      "question": "A18",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "A",
+      "text": "Which React Hook is commonly used to access URL query-string parameters through React Router?"
+    },
+    {
+      "id": "A19",
+      "question": "A19",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "B",
+      "text": "What is the main benefit of separating API calls into a dedicated service module?"
+    },
+    {
+      "id": "A20",
+      "question": "A20",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "A",
+      "text": "What is the purpose of the CSS pseudo-class :focus-visible?"
+    },
+    {
+      "id": "B1",
+      "question": "B1",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "True",
+      "text": "A React application can use React Router to display different page components without requiring a full browser page reload for every navigat"
+    },
+    {
+      "id": "B2",
+      "question": "B2",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "True",
+      "text": "TypeScript interfaces can be used to describe the expected properties of objects received from an API."
+    },
+    {
+      "id": "B3",
+      "question": "B3",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "False",
+      "text": "The JavaScript find() method returns every element that satisfies a condition."
+    },
+    {
+      "id": "B4",
+      "question": "B4",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "True",
+      "text": "A React custom Hook must follow the Rules of Hooks, including being called at the top level of a component or another custom Hook."
+    },
+    {
+      "id": "B5",
+      "question": "B5",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "True",
+      "text": "A 403 Forbidden response generally indicates that the request was understood but the user does not have sufficient permission."
+    },
+    {
+      "id": "B6",
+      "question": "B6",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "True",
+      "text": "TanStack Query is designed to help manage asynchronous server data, including caching and synchronisation."
+    },
+    {
+      "id": "B7",
+      "question": "B7",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "False",
+      "text": "Zustand requires every component in an application to subscribe to the entire store."
+    },
+    {
+      "id": "B8",
+      "question": "B8",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "True",
+      "text": "A dynamic route can use a URL parameter to identify which record should be displayed."
+    },
+    {
+      "id": "B9",
+      "question": "B9",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "False",
+      "text": "Client-side validation guarantees that invalid data can never reach a server."
+    },
+    {
+      "id": "B10",
+      "question": "B10",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "True",
+      "text": "The HTTP PUT method can be used by a frontend application when updating an existing resource."
+    },
+    {
+      "id": "B11",
+      "question": "B11",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "True",
+      "text": "A React application can use different layouts for different route groups."
+    },
+    {
+      "id": "B12",
+      "question": "B12",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "True",
+      "text": "The CSS minmax() function can specify minimum and maximum sizes for grid tracks."
+    },
+    {
+      "id": "B13",
+      "question": "B13",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "True",
+      "text": "A TypeScript union type allows a value to belong to one of several specified types."
+    },
+    {
+      "id": "B14",
+      "question": "B14",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "False",
+      "text": "TanStack Query and Zustand are interchangeable tools designed exclusively for storing server responses."
+    },
+    {
+      "id": "B15",
+      "question": "B15",
+      "kind": "objective",
+      "marks": 1,
+      "answer": "True",
+      "text": "A frontend application can use a JWT's expiry information to determine whether a token may have expired."
+    },
+    {
+      "id": "C1",
+      "question": "C1",
+      "kind": "automated",
+      "marks": 3,
+      "text": "reduce() total of [15,25,10,30] stored in `total` (executed in node; must equal 80)",
+      "check": {
+        "type": "node-eval",
+        "setup": "const prices = [15, 25, 10, 30];",
+        "declares": "prices",
+        "expr": "total",
+        "expect": "80"
+      }
+    },
+    {
+      "id": "C2",
+      "question": "C2",
+      "kind": "automated",
+      "marks": 3,
+      "text": "TypeScript interface Product (id, name, price, optional description) — compiled with tsc --strict against valid and invalid objects",
+      "check": {
+        "type": "ts-compile",
+        "suffix": "\nconst ok1: Product = { id: 1, name: 'a', price: 2 };\nconst ok2: Product = { id: 1, name: 'a', price: 2, description: 'd' };\n// @ts-expect-error missing price\nconst bad1: Product = { id: 1, name: 'a' };\n// @ts-expect-error wrong id type\nconst bad2: Product = { id: '1', name: 'a', price: 2 };\nexport { ok1, ok2, bad1, bad2 };\n"
+      }
+    },
+    {
+      "id": "C3",
+      "question": "C3",
+      "kind": "static",
+      "marks": 3,
+      "text": "useParams() and the expression that obtains orderId (pattern check, not a test)",
+      "check": {
+        "type": "regex-all",
+        "patterns": [
+          "useParams",
+          "orderId"
+        ],
+        "anyOf": [
+          "\\{\\s*orderId\\s*\\}\\s*=\\s*useParams",
+          "useParams\\(\\)\\s*\\.\\s*orderId",
+          "params\\.orderId"
+        ]
+      }
+    },
+    {
+      "id": "C4",
+      "question": "C4",
+      "kind": "static",
+      "marks": 3,
+      "text": "invalidateQueries() and what it does (pattern check, not a test)",
+      "check": {
+        "type": "regex-all",
+        "patterns": [
+          "invalidateQueries",
+          "(stale|invalid)",
+          "(refetch|refresh)"
+        ]
+      }
+    },
+    {
+      "id": "C5",
+      "question": "C5",
+      "kind": "manual",
+      "marks": 3,
+      "text": "Difference between 401 and 403 from the frontend's perspective",
+      "rubric": "1: 401 = not authenticated / invalid or expired credentials. 1: 403 = authenticated but not permitted. 1: frontend response and distinction (sign in again vs access-denied message)."
+    },
+    {
+      "id": "D1.a",
+      "question": "D1",
+      "kind": "manual",
+      "marks": 4,
+      "text": "D1 part a",
+      "rubric": "React Router config: BrowserRouter+Routes (1), parent layout route (1), child routes (1), dynamic students/:studentId route (1)"
+    },
+    {
+      "id": "D1.b",
+      "question": "D1",
+      "kind": "manual",
+      "marks": 2,
+      "text": "D1 part b",
+      "rubric": "Outlet renders the matching child route inside the shared layout"
+    },
+    {
+      "id": "D1.c",
+      "question": "D1",
+      "kind": "manual",
+      "marks": 2,
+      "text": "D1 part c",
+      "rubric": "useParams reads studentId and displays it"
+    },
+    {
+      "id": "D1.d",
+      "question": "D1",
+      "kind": "manual",
+      "marks": 2,
+      "text": "D1 part d",
+      "rubric": "useNavigate and calling navigate('/settings') after saving"
+    },
+    {
+      "id": "D2.a",
+      "question": "D2",
+      "kind": "manual",
+      "marks": 2,
+      "text": "D2 part a",
+      "rubric": "Network latency: async operations keep the UI responsive while waiting"
+    },
+    {
+      "id": "D2.b",
+      "question": "D2",
+      "kind": "manual",
+      "marks": 6,
+      "text": "D2 part b",
+      "rubric": "useEffect (1), fetch (1), loading state (1), error handling (1), data + count (1), AbortController cleanup (1)"
+    },
+    {
+      "id": "D2.c",
+      "question": "D2",
+      "kind": "manual",
+      "marks": 2,
+      "text": "D2 part c",
+      "rubric": "Service module separates API access from components, reuse, maintainability"
+    },
+    {
+      "id": "D3.a",
+      "question": "D3",
+      "kind": "manual",
+      "marks": 4,
+      "text": "D3 part a",
+      "rubric": "Validation: name (1), location (1), positive integer (1), suitable errors returned (1)"
+    },
+    {
+      "id": "D3.b",
+      "question": "D3",
+      "kind": "manual",
+      "marks": 3,
+      "text": "D3 part b",
+      "rubric": "POST to /api/events (1), headers + JSON.stringify (1), response/error handling (1)"
+    },
+    {
+      "id": "D3.c",
+      "question": "D3",
+      "kind": "manual",
+      "marks": 3,
+      "text": "D3 part c",
+      "rubric": "POST creates (server assigns id, not idempotent) vs PUT replaces a known resource (idempotent)"
+    },
+    {
+      "id": "D4.a",
+      "question": "D4",
+      "kind": "manual",
+      "marks": 4,
+      "text": "D4 part a",
+      "rubric": "Zustand for theme; TanStack Query for API data/caching/refresh/avoiding requests; client vs server state; reasons"
+    },
+    {
+      "id": "D4.b",
+      "question": "D4",
+      "kind": "manual",
+      "marks": 2,
+      "text": "D4 part b",
+      "rubric": "Query caching: stored data reused instead of immediate refetch; benefits"
+    },
+    {
+      "id": "D4.c",
+      "question": "D4",
+      "kind": "manual",
+      "marks": 2,
+      "text": "D4 part c",
+      "rubric": "invalidateQueries() after a successful update (e.g. in useMutation onSuccess)"
+    },
+    {
+      "id": "D4.d",
+      "question": "D4",
+      "kind": "manual",
+      "marks": 2,
+      "text": "D4 part d",
+      "rubric": "Selectors subscribe only to needed state, fewer re-renders"
+    },
+    {
+      "id": "E1",
+      "question": "E1",
+      "kind": "objective",
+      "marks": 2,
+      "answer": "B",
+      "text": "A user successfully signs in, but their JWT has expired when they attempt to access a protected page. What should the frontend application n"
+    },
+    {
+      "id": "E2",
+      "question": "E2",
+      "kind": "objective",
+      "marks": 2,
+      "answer": "A",
+      "text": "What is the main difference between authentication and authorisation?"
+    },
+    {
+      "id": "E3",
+      "question": "E3",
+      "kind": "objective",
+      "marks": 2,
+      "answer": "B",
+      "text": "A frontend application allows users to access different pages depending on their roles. Why should the frontend not rely exclusively on hidi"
+    },
+    {
+      "id": "E4",
+      "question": "E4",
+      "kind": "objective",
+      "marks": 2,
+      "answer": "True",
+      "text": "True or False: Sending authentication tokens and other sensitive information over HTTPS helps protect them while travelling between the brow"
+    },
+    {
+      "id": "E5",
+      "question": "E5",
+      "kind": "objective",
+      "marks": 2,
+      "answer": "False",
+      "text": "True or False: A frontend application should treat data received from an external API as automatically trustworthy simply because the reques"
+    }
+  ]
+}

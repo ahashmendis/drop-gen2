@@ -1,0 +1,131 @@
+// ===== Task 1 =====
+// ===== FILE: src/main/java/edu/practice/dispatch/model/GroundMission.java =====
+package edu.practice.dispatch.model;
+import java.util.*;
+public class GroundMission extends DispatchMission {
+ private final boolean medical;
+ public GroundMission(long id,int distanceKm,int loadKg,boolean medical){super(id,distanceKm,loadKg);this.medical=medical;}
+ public boolean isMedical(){return medical;}
+ @Override public int energyUnits(){
+  long result = (long) getDistanceKm() * 2L + (long) getLoadKg() * 5L;
+  try { return Math.toIntExact(result); } catch (ArithmeticException e) { throw new IllegalArgumentException("energy overflow"); }
+ }
+ @Override public int priority(){
+  if (isMedical()) { return 3; } else { return 1; }
+ }
+}
+
+// ===== Task 2 =====
+// ===== FILE: src/main/java/edu/practice/dispatch/model/AirMission.java =====
+package edu.practice.dispatch.model;
+import java.util.*;
+public class AirMission extends DispatchMission {
+ private final int windPenalty;
+ private final boolean critical;
+ public AirMission(long id,int distanceKm,int loadKg,int windPenalty,boolean critical){super(id,distanceKm,loadKg);this.windPenalty=windPenalty;this.critical=critical;}
+ public int getWindPenalty(){return windPenalty;}
+ public boolean isCritical(){return critical;}
+ @Override public int energyUnits(){
+  long result = (long) getDistanceKm() * 3L + (long) getLoadKg() * 8L + (long) getWindPenalty() * 2L;
+  try { return Math.toIntExact(result); } catch (ArithmeticException e) { throw new IllegalArgumentException("energy overflow"); }
+ }
+ @Override public int priority(){
+  if (isCritical()) { return 5; } else { return 2; }
+ }
+}
+
+// ===== Task 2 =====
+// ===== FILE: src/main/java/edu/practice/dispatch/service/DispatchService.java =====
+package edu.practice.dispatch.service;
+import edu.practice.dispatch.model.*;import edu.practice.dispatch.dto.*;import edu.practice.dispatch.repo.*;import edu.practice.dispatch.error.*;
+import org.springframework.stereotype.Service;import java.util.*;
+@Service public class DispatchService {
+ private final MissionRepository repo;
+ public DispatchService(MissionRepository repo){this.repo=repo;}
+ public Collection<DispatchMission> all(){return repo.all();}
+ public int energy(long id){
+  DispatchMission m = repo.find(id);
+  if (m == null) { throw new MissionNotFoundException(id); }
+  return m.energyUnits();
+ }
+ public DispatchMission addAir(NewAirMission request){
+  if (request.id() <= 0L || request.distanceKm() < 0 || request.loadKg() < 0 || request.windPenalty() < 0) { throw new IllegalArgumentException("invalid input"); }
+  if (repo.exists(request.id())) { throw new IllegalArgumentException("id not unique"); }
+  if (request.id() > 10000L || request.distanceKm() > 10000 || request.loadKg() > 10000 || request.windPenalty() > 10000) { throw new IllegalArgumentException("value out of range"); }
+  AirMission m = new AirMission(request.id(),request.distanceKm(),request.loadKg(),request.windPenalty(),request.critical());
+  repo.save(m);
+  return m;
+ }
+ public DispatchPlan plan(int capacity,boolean urgentOnly){
+  List<DispatchMission> missions = new ArrayList<>();
+  for (DispatchMission m : repo.all()) { missions.add(m); }
+  if (urgentOnly) {
+    missions.removeIf(m -> m.priority() < 3);
+  }
+  Collections.sort(missions, new Comparator<DispatchMission>() {
+   @Override public int compare(DispatchMission first, DispatchMission second) {
+    int p1 = first.priority();
+    int p2 = second.priority();
+    if (p1 != p2) { return Integer.compare(p2, p1); }
+    long e1 = first.energyUnits();
+    long e2 = second.energyUnits();
+    if (e1 != e2) { return Long.compare(e1, e2); }
+    return Long.compare(first.getId(), second.getId());
+   }
+  });
+  List<PlanLine> selected = new ArrayList<>();
+  List<Long> skipped = new ArrayList<>();
+  int used = 0;
+  for (DispatchMission m : missions) {
+   if (used + m.energyUnits() > capacity) { skipped.add(m.getId()); continue; }
+   PlanLine pl = new PlanLine(m.getId(),m.getType(),m.priority(),m.energyUnits());
+   selected.add(pl);
+   used += m.energyUnits();
+  }
+  int remaining = capacity - used;
+  DispatchPlan plan = new DispatchPlan(capacity,used,remaining,selected,skipped.stream().map(Long::toString).collect(Collectors.toList()));
+  return plan;
+ }
+}
+
+// ===== Task 2 =====
+// ===== FILE: src/main/java/edu/practice/dispatch/repo/MissionRepository.java =====
+package edu.practice.dispatch.repo;
+import edu.practice.dispatch.model.*;import java.util.*;import java.util.concurrent.*;
+import org.springframework.stereotype.Repository;
+@Repository public class MissionRepository {
+ private final Map<Long,DispatchMission> map=new ConcurrentHashMap<>();
+ public MissionRepository(){
+  map.put(101L,new GroundMission(101,12,3,true));
+  map.put(102L,new GroundMission(102,4,2,false));
+  map.put(103L,new AirMission(103,8,1,3,true));
+ }
+ public Collection<DispatchMission> all(){return List.copyOf(map.values());}
+ public DispatchMission find(long id){return map.get(id);}
+ public boolean exists(long id){return map.containsKey(id);}
+ public void save(DispatchMission m){map.put(m.getId(),m);}
+}
+
+// ===== Task 3 =====
+// ===== FILE: src/main/java/edu/practice/dispatch/error/ApiExceptionHandler.java =====
+package edu.practice.dispatch.error;
+import java.util.*;
+import edu.practice.dispatch.dto.ApiError;import org.springframework.http.*;import org.springframework.web.bind.annotation.*;
+@RestControllerAdvice public class ApiExceptionHandler {
+ @ExceptionHandler(IllegalArgumentException.class) public ResponseEntity<ApiError> badRequest(IllegalArgumentException e){return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(new ApiError("BAD_REQUEST",e.getMessage()));}
+ @ExceptionHandler(MissionNotFoundException.class) public ResponseEntity<ApiError> notFound(MissionNotFoundException e){return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError("NOT_FOUND",e.getMessage()));}
+}
+
+// ===== Task 4 =====
+// ===== FILE: src/main/java/edu/practice/dispatch/controller/DispatchController.java =====
+package edu.practice.dispatch.controller;
+import edu.practice.dispatch.service.*;import edu.practice.dispatch.model.*;import edu.practice.dispatch.dto.*;
+import java.util.*;import org.springframework.web.bind.annotation.*;import org.springframework.http.*;
+@RestController @RequestMapping("/api/missions") public class DispatchController {
+ private final DispatchService service;
+ public DispatchController(DispatchService service){this.service=service;}
+ @GetMapping public Collection<DispatchMission> all(){return service.all();}
+ @GetMapping("/{id}/energy") public ResponseEntity<Map<String,Long>> energy(@PathVariable("id") long id){Map<String,Long> m = new HashMap<>();m.put("energyUnits",Long.valueOf(service.energy(id)));return ResponseEntity.ok(m);}
+ @PostMapping("/air") public ResponseEntity<DispatchMission> addAir(@RequestBody NewAirMission request){return ResponseEntity.status(HttpStatus.CREATED).body(service.addAir(request));}
+ @GetMapping("/plan?capacity=...&urgentOnly=false") public ResponseEntity<DispatchPlan> plan(@RequestParam("capacity") int capacity,@RequestParam(value="urgentOnly",defaultValue="false") boolean urgentOnly){return ResponseEntity.ok(service.plan(capacity,urgentOnly));}
+}

@@ -1,0 +1,242 @@
+{
+  "id": "moderate-dispatch",
+  "title": "Emergency Dispatch Energy Planner API",
+  "level": "MODERATE",
+  "module": "5COSC019W Object Oriented Programming (practice paper)",
+  "inputs": {
+    "paper": "inputs/MODERATE_Practice_Paper.docx",
+    "starter": "inputs/MODERATE_Starter_Project.zip"
+  },
+  "tests": {
+    "runner": "java-main",
+    "main": "bench.DispatchChecks",
+    "dir": "tests",
+    "support": "../_support"
+  },
+  "requirementKinds": {
+    "automated": "verified by the tests listed",
+    "manual": "needs a person to assess; never counted as passed",
+    "untestable": "cannot be tested (source material missing or paper ambiguous)"
+  },
+  "requirements": [
+    {
+      "id": "A1.1",
+      "text": "GroundMission extends DispatchMission, constructor chaining, isMedical()",
+      "marks": 4,
+      "kind": "automated",
+      "tests": [
+        "M-GM-04"
+      ]
+    },
+    {
+      "id": "A1.2",
+      "text": "energyUnits = 2*distanceKm + 5*loadKg with long intermediates and safe conversion to int",
+      "marks": 8,
+      "kind": "automated",
+      "tests": [
+        "M-GM-01",
+        "M-GM-03"
+      ]
+    },
+    {
+      "id": "A1.3",
+      "text": "priority = 3 for a medical mission, otherwise 1",
+      "marks": 6,
+      "kind": "automated",
+      "tests": [
+        "M-GM-02"
+      ]
+    },
+    {
+      "id": "A2.1",
+      "text": "AirMission extends DispatchMission with windPenalty and critical properties, constructor and getters",
+      "marks": 7,
+      "kind": "automated",
+      "tests": [
+        "M-AM-01"
+      ]
+    },
+    {
+      "id": "A2.2",
+      "text": "air energy = 3*distance + 8*load + 2*wind; priority 5 if critical else 2",
+      "marks": 7,
+      "kind": "automated",
+      "tests": [
+        "M-AM-02",
+        "M-AM-03"
+      ]
+    },
+    {
+      "id": "A2.3",
+      "text": "plan(capacity, urgentOnly): optional priority>=3 filter, sort priority DESC/energy ASC/ID ASC, greedy fit, skipped IDs in skip order, no concrete type checks",
+      "marks": 8,
+      "kind": "automated",
+      "tests": [
+        "M-PL-01",
+        "M-PL-02",
+        "M-PL-03",
+        "M-PL-04",
+        "M-PL-05",
+        "M-PL-06",
+        "M-PL-07",
+        "M-PL-09"
+      ]
+    },
+    {
+      "id": "A2.4",
+      "text": "repository seeds AirMission(103,8,1,3,true)",
+      "marks": 0,
+      "kind": "automated",
+      "tests": [
+        "M-AM-04"
+      ],
+      "note": "instruction in the paper, no marks attached"
+    },
+    {
+      "id": "A3.1",
+      "text": "energy(id) raises MissionNotFoundException for unknown ids",
+      "marks": 6,
+      "kind": "automated",
+      "tests": [
+        "M-SV-01",
+        "M-SV-02"
+      ]
+    },
+    {
+      "id": "A3.2",
+      "text": "addAir validates positive id/distance, non-negative load/wind, unique id, values within 0-10,000",
+      "marks": 7,
+      "kind": "automated",
+      "tests": [
+        "M-SV-03",
+        "M-SV-04",
+        "M-SV-05",
+        "M-SV-06",
+        "M-SV-07",
+        "M-SV-08"
+      ]
+    },
+    {
+      "id": "A3.3",
+      "text": "reject non-positive plan capacity; 400 for invalid input and 404 for missing mission with ApiError",
+      "marks": 7,
+      "kind": "automated",
+      "tests": [
+        "M-PL-08",
+        "M-ER-01",
+        "M-ER-02"
+      ]
+    },
+    {
+      "id": "A4.1",
+      "text": "GET /api/missions/{id}/energy returns a JSON object containing energyUnits",
+      "marks": 5,
+      "kind": "automated",
+      "tests": [
+        "M-HT-01",
+        "M-HT-02"
+      ]
+    },
+    {
+      "id": "A4.2",
+      "text": "POST /api/missions/air accepts NewAirMission and returns 201 with the created mission",
+      "marks": 5,
+      "kind": "automated",
+      "tests": [
+        "M-HT-06",
+        "M-HT-08"
+      ]
+    },
+    {
+      "id": "A4.3",
+      "text": "GET /api/missions/plan?capacity=..&urgentOnly=.. returns capacity, energyUsed, energyRemaining, selected, skipped; urgentOnly defaults to false",
+      "marks": 10,
+      "kind": "automated",
+      "tests": [
+        "M-HT-03",
+        "M-HT-04",
+        "M-HT-05"
+      ]
+    },
+    {
+      "id": "A2.5",
+      "text": "skipped list when urgentOnly filters missions out: are filtered-out IDs also reported as skipped?",
+      "marks": 0,
+      "kind": "untestable",
+      "note": "The paper says 'record unselected IDs in skip order' but does not say whether filtered-out missions count. Tests do not assert it."
+    },
+    {
+      "id": "A3.4",
+      "text": "the 0-10,000 range applies to the id field as well as distance/load/wind?",
+      "marks": 0,
+      "kind": "untestable",
+      "note": "Paper says 'values within 0-10,000' without naming id. Tests only assert distance, load and wind."
+    },
+    {
+      "id": "B.1",
+      "text": "GroundMission(101) consumes 39 energy units and has priority 3",
+      "marks": 3,
+      "kind": "automated",
+      "tests": [
+        "M-GM-01",
+        "M-GM-02",
+        "M-HT-01"
+      ]
+    },
+    {
+      "id": "B.2",
+      "text": "AirMission(103) consumes 38 units and has priority 5",
+      "marks": 3,
+      "kind": "automated",
+      "tests": [
+        "M-AM-02",
+        "M-AM-03",
+        "M-HT-02"
+      ]
+    },
+    {
+      "id": "B.3",
+      "text": "capacity 60: greedy dispatch selects [103,102] and skips [101]",
+      "marks": 3,
+      "kind": "automated",
+      "tests": [
+        "M-PL-01",
+        "M-HT-03"
+      ]
+    },
+    {
+      "id": "B.4",
+      "text": "urgentOnly=true excludes the routine mission",
+      "marks": 3,
+      "kind": "automated",
+      "tests": [
+        "M-PL-03",
+        "M-HT-05"
+      ]
+    },
+    {
+      "id": "B.5",
+      "text": "bad capacity and invalid POST return 400; unknown ID returns 404",
+      "marks": 4,
+      "kind": "automated",
+      "tests": [
+        "M-ER-01",
+        "M-ER-02",
+        "M-HT-08"
+      ]
+    },
+    {
+      "id": "B.6",
+      "text": "successful POST returns 201 and later planning incorporates the new mission",
+      "marks": 4,
+      "kind": "automated",
+      "tests": [
+        "M-HT-06",
+        "M-HT-07"
+      ]
+    }
+  ],
+  "expectedNewFiles": [
+    "model/AirMission.java"
+  ]
+}

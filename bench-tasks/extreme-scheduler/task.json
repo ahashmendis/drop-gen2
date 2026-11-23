@@ -1,0 +1,300 @@
+{
+  "id": "extreme-scheduler",
+  "title": "Multi-Resource Workload Scheduling API",
+  "level": "EXTREME",
+  "module": "5COSC019W Object Oriented Programming (practice paper)",
+  "inputs": {
+    "paper": "inputs/EXTREME_Practice_Paper.docx",
+    "starter": "inputs/EXTREME_Starter_Project.zip"
+  },
+  "tests": {
+    "runner": "java-main",
+    "main": "bench.SchedulerChecks",
+    "dir": "tests",
+    "support": "../_support"
+  },
+  "requirementKinds": {
+    "automated": "verified by the tests listed",
+    "manual": "needs a person to assess; never counted as passed",
+    "untestable": "cannot be tested (source material missing or paper ambiguous)"
+  },
+  "requirements": [
+    {
+      "id": "A1.1",
+      "text": "BatchWorkload initialises inherited fields through the parent constructor",
+      "marks": 4,
+      "kind": "automated",
+      "tests": [
+        "E-BW-05"
+      ]
+    },
+    {
+      "id": "A1.2",
+      "text": "urgencyAt = 100 + 2*max(0, now-release); reject negative nowTick; prevent overflow",
+      "marks": 8,
+      "kind": "automated",
+      "tests": [
+        "E-BW-01",
+        "E-BW-02",
+        "E-BW-03"
+      ]
+    },
+    {
+      "id": "A1.3",
+      "text": "latestStartTick() returns Integer.MAX_VALUE; dispatch stays polymorphic via Workload",
+      "marks": 6,
+      "kind": "automated",
+      "tests": [
+        "E-BW-04"
+      ]
+    },
+    {
+      "id": "A2.1",
+      "text": "DeadlineWorkload with deadlineTick, constructor and getter",
+      "marks": 7,
+      "kind": "automated",
+      "tests": [
+        "E-DW-01"
+      ]
+    },
+    {
+      "id": "A2.2",
+      "text": "deadline urgency = 1000 - 5*max(0, deadline-now-duration) with safe arithmetic; latestStartTick = deadline - duration",
+      "marks": 7,
+      "kind": "automated",
+      "tests": [
+        "E-DW-02",
+        "E-DW-03",
+        "E-DW-04"
+      ]
+    },
+    {
+      "id": "A2.3",
+      "text": "ranked(now): urgency DESC then ID ASC; urgency(id, now); 404 on missing id",
+      "marks": 8,
+      "kind": "automated",
+      "tests": [
+        "E-RK-01",
+        "E-RK-02",
+        "E-RK-03",
+        "E-RK-04",
+        "E-RK-05",
+        "E-RK-06"
+      ]
+    },
+    {
+      "id": "A2.4",
+      "text": "repository seeds the four paper workloads",
+      "marks": 0,
+      "kind": "automated",
+      "tests": [
+        "E-RK-07"
+      ],
+      "note": "instruction in the paper, no marks attached"
+    },
+    {
+      "id": "A3.1",
+      "text": "validate PlanRequest ranges (nowTick 0-1,000,000; horizon 1-24; cpu 1-64; memory 1-1,000,000)",
+      "marks": 5,
+      "kind": "automated",
+      "tests": [
+        "E-PV-01",
+        "E-PV-02"
+      ]
+    },
+    {
+      "id": "A3.2",
+      "text": "process in ranked order; earliest start = max(now, release); latest start = min(now+horizon-duration, latestStartTick)",
+      "marks": 5,
+      "kind": "automated",
+      "tests": [
+        "E-PV-03",
+        "E-PV-08",
+        "E-PV-09",
+        "E-PV-10"
+      ]
+    },
+    {
+      "id": "A3.3",
+      "text": "earliest feasible integer start; CPU and memory checked on every occupied tick including confirmed and earlier selections; half-open intervals",
+      "marks": 5,
+      "kind": "automated",
+      "tests": [
+        "E-PV-04",
+        "E-PV-06",
+        "E-PV-07",
+        "E-PV-11",
+        "E-CM-07"
+      ]
+    },
+    {
+      "id": "A3.4",
+      "text": "SchedulePlan with selected and rejected in ranked order with reasons; preview does not mutate confirmed state",
+      "marks": 5,
+      "kind": "automated",
+      "tests": [
+        "E-PV-03",
+        "E-PV-05",
+        "E-PV-08",
+        "E-PV-09",
+        "E-PV-12"
+      ]
+    },
+    {
+      "id": "A4.1",
+      "text": "GET urgency, GET ranked, POST preview, GET reservations",
+      "marks": 4,
+      "kind": "automated",
+      "tests": [
+        "E-HT-01",
+        "E-HT-02",
+        "E-HT-03",
+        "E-HT-04"
+      ]
+    },
+    {
+      "id": "A4.2",
+      "text": "POST /commit persists selected assignments on a new runKey",
+      "marks": 4,
+      "kind": "automated",
+      "tests": [
+        "E-CM-01",
+        "E-HT-04"
+      ]
+    },
+    {
+      "id": "A4.2b",
+      "text": "commit persists the assignments atomically (all or nothing, thread-safe)",
+      "marks": 0,
+      "kind": "manual",
+      "note": "Concurrency/atomicity needs code reading: look for synchronized/transactional handling in SchedulerService.commit."
+    },
+    {
+      "id": "A4.3",
+      "text": "identical retry returns the identical original plan without duplicates; changed values on the same runKey give 409 CONFLICT",
+      "marks": 7,
+      "kind": "automated",
+      "tests": [
+        "E-CM-02",
+        "E-CM-03",
+        "E-CM-04",
+        "E-ER-03",
+        "E-HT-05"
+      ]
+    },
+    {
+      "id": "A4.4",
+      "text": "invalid inputs give 400, unknown workload ids 404, GET /reservations deterministic",
+      "marks": 5,
+      "kind": "automated",
+      "tests": [
+        "E-ER-01",
+        "E-ER-02",
+        "E-CM-05",
+        "E-CM-06",
+        "E-HT-06",
+        "E-HT-08"
+      ]
+    },
+    {
+      "id": "A4.5",
+      "text": "controller stays thin: no scheduling logic in the controller",
+      "marks": 0,
+      "kind": "manual",
+      "note": "Read SchedulerController."
+    },
+    {
+      "id": "A3.5",
+      "text": "which rejection reason applies when several are true (e.g. too big AND past deadline)?",
+      "marks": 0,
+      "kind": "untestable",
+      "note": "Paper lists the four reasons but not their precedence. Tests only use single-cause cases."
+    },
+    {
+      "id": "A4.6",
+      "text": "sort key of GET /reservations",
+      "marks": 0,
+      "kind": "untestable",
+      "note": "Paper says 'deterministic ordering' without naming the key. Tests only check stability across calls."
+    },
+    {
+      "id": "A4.7",
+      "text": "JSON shape of GET /urgency and the status code (200/201) of /commit",
+      "marks": 0,
+      "kind": "untestable",
+      "note": "Not specified. Tests accept a bare number or an object with an urgency field, and 200 or 201."
+    },
+    {
+      "id": "B.1",
+      "text": "BatchWorkload urgency ages correctly; deadlines compute the latest legal start",
+      "marks": 3,
+      "kind": "automated",
+      "tests": [
+        "E-BW-01",
+        "E-DW-03"
+      ]
+    },
+    {
+      "id": "B.2",
+      "text": "ranked list uses dynamic urgency and stable ID tie-breaks",
+      "marks": 3,
+      "kind": "automated",
+      "tests": [
+        "E-RK-01",
+        "E-RK-03",
+        "E-RK-04",
+        "E-HT-02"
+      ]
+    },
+    {
+      "id": "B.3",
+      "text": "preview respects CPU, memory, release times, deadlines and half-open intervals",
+      "marks": 3,
+      "kind": "automated",
+      "tests": [
+        "E-PV-03",
+        "E-PV-06",
+        "E-PV-07",
+        "E-PV-08",
+        "E-PV-09",
+        "E-PV-11"
+      ]
+    },
+    {
+      "id": "B.4",
+      "text": "preview makes no persistent reservations, even after repeated calls",
+      "marks": 3,
+      "kind": "automated",
+      "tests": [
+        "E-PV-12",
+        "E-HT-07"
+      ]
+    },
+    {
+      "id": "B.5",
+      "text": "commit stores once; identical retry returns the original plan and never double-books",
+      "marks": 4,
+      "kind": "automated",
+      "tests": [
+        "E-CM-01",
+        "E-CM-02",
+        "E-HT-05"
+      ]
+    },
+    {
+      "id": "B.6",
+      "text": "changed request on a reused runKey returns 409; other invalid requests give 400",
+      "marks": 4,
+      "kind": "automated",
+      "tests": [
+        "E-CM-03",
+        "E-ER-02",
+        "E-ER-03",
+        "E-HT-06"
+      ]
+    }
+  ],
+  "expectedNewFiles": [
+    "model/DeadlineWorkload.java"
+  ]
+}
